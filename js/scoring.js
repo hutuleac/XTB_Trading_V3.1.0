@@ -1,0 +1,222 @@
+// ============================================================
+// SCORING — Composite score & confluence setup detection
+// @version 3.1.0
+// @updated 2026-03-16
+// ============================================================
+
+const Scoring = {
+    /**
+     * Calculate composite score (0-100).
+     */
+    calcCompositeScore(d) {
+        let score = 0;
+
+        // Technical (max 50)
+        const rsi = d.rsi_daily;
+        if (rsi != null && rsi > 30 && rsi < 45) score += 10;
+
+        if (d.structure === "Bullish") score += 10;
+
+        if (d.price && d.ema200 && d.price > d.ema200) score += 10;
+
+        if (d.price && d.avwap_30d && d.price > d.avwap_30d) score += 10;
+
+        const fib = d.fib_position;
+        if (fib === "BETWEEN_382_618" || fib === "BETWEEN_236_382") score += 10;
+
+        // Fundamental (max 30)
+        if (d.days_to_earnings != null && d.days_to_earnings > 21) score += 10;
+
+        if (d.eps_growth_yoy != null && d.eps_growth_yoy > 0) score += 10;
+
+        if (d.pe_forward != null && d.pe_trailing != null && d.pe_forward < d.pe_trailing) score += 10;
+
+        // Sentiment (max 20) — PCR omitted, only RS
+        if (d.rs_spy_30d != null && d.rs_spy_30d > 1.0) score += 10;
+
+        // Penalties
+        if (d.days_to_earnings != null && d.days_to_earnings < 7) score -= 20;
+
+        if (d.atr_pct != null && d.atr_pct > 5) score -= 15;
+
+        if (d.structure === "Bearish" && d.price && d.ema200 && d.price < d.ema200) score -= 15;
+
+        return Math.max(0, Math.min(100, score));
+    },
+
+    /**
+     * Return detailed breakdown of score for tooltips.
+     */
+    calcScoreBreakdown(d) {
+        const items = [];
+        const rsi = d.rsi_daily;
+        items.push({
+            name: "RSI entry zone (30-45)",
+            met: rsi != null && rsi > 30 && rsi < 45,
+            value: rsi != null ? String(rsi) : "N/A",
+            pts: 10,
+        });
+
+        items.push({
+            name: "Structure Bullish",
+            met: d.structure === "Bullish",
+            value: d.structure || "N/A",
+            pts: 10,
+        });
+
+        const price = d.price;
+        const ema200 = d.ema200;
+        items.push({
+            name: "Price > EMA200",
+            met: !!(price && ema200 && price > ema200),
+            value: price && ema200 ? `${price} vs ${ema200}` : "N/A",
+            pts: 10,
+        });
+
+        const avwap30 = d.avwap_30d;
+        items.push({
+            name: "Price > AVWAP30d",
+            met: !!(price && avwap30 && price > avwap30),
+            value: price && avwap30 ? `${price} vs ${avwap30}` : "N/A",
+            pts: 10,
+        });
+
+        items.push({
+            name: "Fib value zone",
+            met: d.fib_position === "BETWEEN_382_618" || d.fib_position === "BETWEEN_236_382",
+            value: d.fib_position || "N/A",
+            pts: 10,
+        });
+
+        items.push({
+            name: "Earnings > 21d",
+            met: d.days_to_earnings != null && d.days_to_earnings > 21,
+            value: d.days_to_earnings != null ? `${d.days_to_earnings}d` : "N/A",
+            pts: 10,
+        });
+
+        items.push({
+            name: "EPS growth > 0",
+            met: d.eps_growth_yoy != null && d.eps_growth_yoy > 0,
+            value: d.eps_growth_yoy != null ? `${d.eps_growth_yoy}%` : "N/A",
+            pts: 10,
+        });
+
+        items.push({
+            name: "Fwd P/E < Trail P/E",
+            met: d.pe_forward != null && d.pe_trailing != null && d.pe_forward < d.pe_trailing,
+            value: d.pe_forward && d.pe_trailing ? `${d.pe_forward} vs ${d.pe_trailing}` : "N/A",
+            pts: 10,
+        });
+
+        items.push({
+            name: "RS > SPY",
+            met: d.rs_spy_30d != null && d.rs_spy_30d > 1.0,
+            value: d.rs_spy_30d != null ? String(d.rs_spy_30d) : "N/A",
+            pts: 10,
+        });
+
+        // Penalties
+        const penalties = [];
+        if (d.days_to_earnings != null && d.days_to_earnings < 7) {
+            penalties.push({ name: "Earnings < 7d", pts: -20 });
+        }
+        if (d.atr_pct != null && d.atr_pct > 5) {
+            penalties.push({ name: `ATR% extreme (${d.atr_pct}%)`, pts: -15 });
+        }
+        if (d.structure === "Bearish" && d.price && d.ema200 && d.price < d.ema200) {
+            penalties.push({ name: "Bearish + below EMA200", pts: -15 });
+        }
+
+        return { criteria: items, penalties };
+    },
+
+    /**
+     * Determine trading setup based on confluence.
+     */
+    getConfluenceSetup(d) {
+        const price = d.price;
+        const rsi = d.rsi_daily;
+        const structure = d.structure;
+        const adx = d.adx;
+        const ema200 = d.ema200;
+        const avwap30 = d.avwap_30d;
+        const fibPos = d.fib_position;
+        const daysEarn = d.days_to_earnings;
+        const atrPct = d.atr_pct;
+        const ema50 = d.ema50;
+        const bbBW = d.bb_bandwidth;
+
+        // WAIT checks
+        const waitReasons = [];
+        if (daysEarn != null && daysEarn < 10) waitReasons.push(`Earnings in ${daysEarn} days`);
+        if (atrPct != null && atrPct > 5) waitReasons.push(`ATR% extreme (${atrPct}%)`);
+        if (structure === "Neutral" && adx != null && adx < 20) waitReasons.push("No direction (Neutral + ADX < 20)");
+        if (price && ema50 && ema200 && Math.min(ema50, ema200) < price && price < Math.max(ema50, ema200)) {
+            waitReasons.push("Price between EMA50 and EMA200");
+        }
+        if (bbBW != null && bbBW < 1.5) waitReasons.push(`BB squeeze (${bbBW}%)`);
+        if (rsi != null && rsi > 75 && fibPos === "ABOVE_786") waitReasons.push("RSI overbought + Fib extended");
+
+        const epsG = d.eps_growth_yoy;
+        const peFwd = d.pe_forward;
+        const peTrail = d.pe_trailing;
+        if (epsG != null && epsG < 0 && peFwd != null && peTrail != null && peFwd > peTrail) {
+            waitReasons.push("Fundamental deterioration");
+        }
+
+        if (waitReasons.length > 0) {
+            return { setup_type: "WAIT", criteria_met: 0, total_criteria: 0, sizing_pct: 0, reasons: waitReasons };
+        }
+
+        // LONG (6 criteria)
+        const longMet = [];
+        if (price && ema200 && price > ema200) longMet.push("Price > EMA200");
+        if (rsi != null && rsi >= 35 && rsi <= 55) longMet.push(`RSI ${rsi} in 35-55 zone`);
+        if (structure === "Bullish") longMet.push("Structure Bullish");
+        if (price && avwap30 && price > avwap30) longMet.push("Price > AVWAP 30d");
+        if (fibPos === "BETWEEN_382_618" || fibPos === "BETWEEN_236_382") longMet.push(`Fib value zone (${fibPos})`);
+        if (adx != null) {
+            if (adx < 25 || (adx > 30 && structure === "Bullish")) longMet.push(`ADX ${adx} favorable`);
+        }
+
+        // SHORT (6 criteria)
+        const shortMet = [];
+        if (price && ema200 && price < ema200) shortMet.push("Price < EMA200");
+        if (rsi != null && rsi >= 45 && rsi <= 65) shortMet.push(`RSI ${rsi} in 45-65 zone`);
+        if (structure === "Bearish") shortMet.push("Structure Bearish");
+        if (price && avwap30 && price < avwap30) shortMet.push("Price < AVWAP 30d");
+        if (fibPos === "BETWEEN_618_786" || fibPos === "ABOVE_786") shortMet.push(`Fib rejection zone (${fibPos})`);
+        if (adx != null && adx > 20) shortMet.push(`ADX ${adx} trending`);
+
+        const longCount = longMet.length;
+        const shortCount = shortMet.length;
+
+        if (longCount >= 4 && longCount >= shortCount) {
+            return {
+                setup_type: "LONG",
+                criteria_met: longCount,
+                total_criteria: 6,
+                sizing_pct: longCount >= 5 ? 100 : 60,
+                reasons: longMet,
+            };
+        }
+        if (shortCount >= 4) {
+            return {
+                setup_type: "SHORT",
+                criteria_met: shortCount,
+                total_criteria: 6,
+                sizing_pct: shortCount >= 5 ? 100 : 60,
+                reasons: shortMet,
+            };
+        }
+
+        return {
+            setup_type: "WAIT",
+            criteria_met: Math.max(longCount, shortCount),
+            total_criteria: 6,
+            sizing_pct: 0,
+            reasons: [`Insufficient confluence (L:${longCount}/6, S:${shortCount}/6)`],
+        };
+    },
+};

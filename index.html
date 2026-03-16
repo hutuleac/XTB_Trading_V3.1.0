@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Market Dashboard — Live</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        surface: { 900: '#0f1117', 800: '#161922', 700: '#1e2231', 600: '#282d3e' },
+                        accent: { green: '#22c55e', red: '#ef4444', yellow: '#eab308', orange: '#f97316', blue: '#3b82f6', purple: '#a855f7' },
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+        table { border-collapse: separate; border-spacing: 0; width: 100%; }
+        th { position: sticky; top: 0; z-index: 10; }
+        .chart-panel { transition: max-height 0.3s ease, opacity 0.3s ease; max-height: 0; opacity: 0; overflow: hidden; }
+        .chart-panel.open { max-height: 1200px; opacity: 1; }
+        .score-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 46px;
+                       padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 16px; cursor: help; position: relative; }
+        .setup-badge { display: inline-flex; align-items: center; padding: 3px 12px; border-radius: 6px;
+                       font-weight: 600; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px; cursor: help; position: relative; }
+        tr.ticker-row { cursor: pointer; transition: background 0.15s; }
+        tr.ticker-row:hover { background: #1e2231 !important; }
+        .cell-val { font-variant-numeric: tabular-nums; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #161922; }
+        ::-webkit-scrollbar-thumb { background: #3b4260; border-radius: 4px; }
+
+        .tip { position: relative; cursor: help; }
+        .tip .tiptext {
+            visibility: hidden; opacity: 0;
+            position: absolute; z-index: 50;
+            bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+            background: #1e2231; border: 1px solid #3b4260; border-radius: 8px;
+            padding: 10px 14px; font-size: 13px; line-height: 1.6;
+            white-space: nowrap; color: #cbd5e1;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            transition: opacity 0.15s;
+            pointer-events: none;
+        }
+        .tip:hover .tiptext { visibility: visible; opacity: 1; }
+        .tip-down .tiptext { bottom: auto !important; top: calc(100% + 8px); }
+        .tiptext .tip-row { display: flex; gap: 8px; align-items: center; }
+        .tiptext .met { color: #22c55e; }
+        .tiptext .not-met { color: #6b7280; }
+        .tiptext .penalty { color: #ef4444; }
+
+        .ticker-card {
+            background: #161922; border: 1px solid #282d3e; border-radius: 10px;
+            padding: 20px; margin-bottom: 12px;
+        }
+        .ticker-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+        .ticker-card .detail-line { font-size: 15px; color: #94a3b8; margin: 4px 0; }
+        .ticker-card .criteria-item { font-size: 14px; margin: 3px 0; }
+
+        .legend-box {
+            background: #161922; border: 1px solid #282d3e; border-radius: 10px;
+            padding: 16px 20px;
+        }
+        .legend-title { font-size: 16px; font-weight: 700; color: #e2e8f0; margin-bottom: 8px; }
+        .legend-item { font-size: 14px; color: #94a3b8; margin: 4px 0; }
+
+        .ohlcv-legend {
+            position: absolute; top: 8px; left: 12px; z-index: 20;
+            font-size: 12px; color: #94a3b8; pointer-events: none;
+            font-family: 'Inter', system-ui, monospace;
+        }
+        .ohlcv-legend span { margin-right: 10px; }
+        .chart-wrap { position: relative; }
+
+        .screenshot-btn {
+            background: #282d3e; border: 1px solid #3b4260; border-radius: 6px;
+            color: #94a3b8; padding: 4px 10px; font-size: 12px; cursor: pointer;
+            transition: background 0.15s;
+        }
+        .screenshot-btn:hover { background: #3b4260; color: #e2e8f0; }
+
+        /* Setup & Settings overlays */
+        .overlay {
+            position: fixed; inset: 0; z-index: 100;
+            background: rgba(0,0,0,0.85);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .overlay-card {
+            background: #161922; border: 1px solid #282d3e; border-radius: 16px;
+            padding: 32px 40px; max-width: 520px; width: 90%;
+        }
+        .overlay-card h2 { font-size: 24px; font-weight: 700; color: #e2e8f0; margin-bottom: 8px; }
+        .overlay-card p { font-size: 14px; color: #94a3b8; margin-bottom: 20px; }
+        .overlay-card label { display: block; font-size: 14px; font-weight: 600; color: #cbd5e1; margin-bottom: 6px; }
+        .overlay-card input, .overlay-card textarea {
+            width: 100%; background: #0f1117; border: 1px solid #3b4260; border-radius: 8px;
+            padding: 10px 14px; color: #e2e8f0; font-size: 14px; margin-bottom: 16px;
+            outline: none; transition: border-color 0.15s;
+        }
+        .overlay-card input:focus, .overlay-card textarea:focus { border-color: #3b82f6; }
+        .btn-primary {
+            background: #3b82f6; color: white; border: none; border-radius: 8px;
+            padding: 10px 24px; font-size: 15px; font-weight: 600; cursor: pointer;
+            transition: background 0.15s;
+        }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-secondary {
+            background: #282d3e; color: #94a3b8; border: 1px solid #3b4260; border-radius: 8px;
+            padding: 10px 24px; font-size: 15px; font-weight: 600; cursor: pointer;
+            transition: background 0.15s;
+        }
+        .btn-secondary:hover { background: #3b4260; color: #e2e8f0; }
+
+        /* Loading spinner */
+        .spinner {
+            border: 3px solid #282d3e; border-top: 3px solid #3b82f6;
+            border-radius: 50%; width: 40px; height: 40px;
+            animation: spin 1s linear infinite; margin: 0 auto 16px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body class="dark min-h-screen">
+
+    <!-- INITIAL SETUP OVERLAY -->
+    <div id="setup-overlay" class="overlay hidden">
+        <div class="overlay-card">
+            <h2>📊 Stock Market Dashboard</h2>
+            <p>Welcome! Enter your <a href="https://financialmodelingprep.com/developer/docs/" target="_blank" style="color:#3b82f6; text-decoration:underline;">Financial Modeling Prep</a> API key to get started. Free tier gives you 250 requests/day.</p>
+            <label for="setup-api-key">FMP API Key</label>
+            <input type="text" id="setup-api-key" placeholder="Your FMP API key...">
+            <label for="setup-tickers">Watchlist (comma-separated)</label>
+            <input type="text" id="setup-tickers" placeholder="TSLA, HOOD, SOFI, AMZN, SKM, GOOGL" value="TSLA, HOOD, SOFI, AMZN, SKM, GOOGL">
+            <div class="flex gap-3 mt-2">
+                <button class="btn-primary" onclick="UI.saveInitialSetup()">Launch Dashboard</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SETTINGS OVERLAY -->
+    <div id="settings-overlay" class="overlay hidden">
+        <div class="overlay-card">
+            <h2>⚙️ Settings</h2>
+            <p>Update your API key and watchlist. Changes take effect on next refresh.</p>
+            <label for="api-key-input">FMP API Key</label>
+            <input type="text" id="api-key-input" placeholder="Your FMP API key...">
+            <label for="tickers-input">Watchlist (comma-separated)</label>
+            <input type="text" id="tickers-input" placeholder="TSLA, HOOD, SOFI, AMZN, SKM, GOOGL">
+            <div class="flex gap-3 mt-2">
+                <button class="btn-primary" onclick="UI.saveSettings()">Save & Refresh</button>
+                <button class="btn-secondary" onclick="UI.hideSettings()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- LOADING -->
+    <div id="loading-section" class="hidden" style="padding-top: 20vh; text-align: center;">
+        <div class="spinner"></div>
+        <p class="text-lg text-gray-300 font-semibold" id="loading-message">Loading data...</p>
+        <p class="text-sm text-gray-500 mt-2" id="loading-progress"></p>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="dashboard-content" class="hidden">
+        <!-- HEADER -->
+        <header class="border-b border-gray-800 px-6 py-4">
+            <div class="flex items-center justify-between max-w-[1600px] mx-auto">
+                <div>
+                    <h1 class="text-2xl font-bold text-white">📊 Stock Market Dashboard</h1>
+                    <p class="text-base text-gray-400 mt-0.5" id="header-timestamp"></p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="text-sm text-gray-500" id="ticker-count"></span>
+                    <button class="btn-secondary" style="padding:6px 14px; font-size:13px;" onclick="App.loadDashboard()">↻ Refresh</button>
+                    <button class="btn-secondary" style="padding:6px 14px; font-size:13px;" onclick="UI.showSettings()">⚙ Settings</button>
+                    <span class="px-3 py-1 bg-surface-700 rounded text-sm text-gray-300">v3.1.0</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- MAIN CONTENT -->
+        <main class="px-4 py-4 max-w-[1600px] mx-auto">
+            <!-- PRIMARY TABLE -->
+            <div class="rounded-lg border border-gray-800 bg-surface-800">
+                <table class="text-sm">
+                    <thead>
+                        <tr class="text-gray-400 bg-surface-900">
+                            <th class="px-3 py-3 text-left font-medium bg-surface-900">Symbol</th>
+                            <th class="px-3 py-3 text-right font-medium bg-surface-900">Price</th>
+                            <th class="px-3 py-3 text-right font-medium bg-surface-900">1D%</th>
+                            <th class="px-3 py-3 text-center font-medium bg-surface-900">Score</th>
+                            <th class="px-3 py-3 text-center font-medium bg-surface-900">Setup</th>
+                            <th class="px-3 py-3 text-right font-medium bg-surface-900">RSI</th>
+                            <th class="px-3 py-3 text-center font-medium bg-surface-900">Trend</th>
+                            <th class="px-3 py-3 text-center font-medium bg-surface-900">Structure</th>
+                            <th class="px-3 py-3 text-center font-medium bg-surface-900">Earn</th>
+                            <th class="px-3 py-3 text-center font-medium bg-surface-900">Rating</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+
+            <!-- SECONDARY TABLE -->
+            <div class="mt-4 rounded-lg border border-gray-800 bg-surface-800">
+                <div class="px-4 py-2.5 border-b border-gray-800 bg-surface-900/70">
+                    <span class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Technical & Fundamental Details</span>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table class="text-[13px]" style="min-width: 1200px;">
+                        <thead>
+                            <tr class="text-gray-500 bg-surface-900">
+                                <th class="px-2 py-2.5 text-left font-medium bg-surface-900">Symbol</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">ATR%</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">EMA50</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">EMA200</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">AVWAP30d</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">POC14d</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">ADX</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">BB-BW</th>
+                                <th class="px-2 py-2.5 text-center font-medium bg-surface-900">Sweep</th>
+                                <th class="px-2 py-2.5 text-center font-medium bg-surface-900">FVG</th>
+                                <th class="px-2 py-2.5 text-center font-medium bg-surface-900">Fib-Pos</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Vol/Avg</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">52W%</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">RS-SPY</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">P/E</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Fwd P/E</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">EPS-G</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Short%</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Beta</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detail-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- LEGEND -->
+            <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="legend-box">
+                    <div class="legend-title">Color Legend</div>
+                    <div class="legend-item"><span class="text-accent-green font-semibold">Green</span> = Bullish / Oversold / Buy / Outperform</div>
+                    <div class="legend-item"><span class="text-accent-red font-semibold">Red</span> = Bearish / Overbought / Sell / Underperform</div>
+                    <div class="legend-item"><span class="text-accent-yellow font-semibold">Yellow</span> = Neutral / Caution / Hold</div>
+                    <div class="legend-item mt-2"><span class="text-green-400 font-semibold">Score 70-100</span> = Strong Setup &nbsp;|&nbsp; <span class="text-yellow-400 font-semibold">40-69</span> = Marginal &nbsp;|&nbsp; <span class="text-red-400 font-semibold">0-39</span> = Avoid</div>
+                    <div class="legend-item"><span class="font-semibold text-gray-300">Setup LONG/SHORT</span> = 4+ criteria met (60% sizing) &nbsp;|&nbsp; 5+ criteria (100% sizing)</div>
+                </div>
+                <div class="legend-box">
+                    <div class="legend-title">Quick Reference</div>
+                    <div class="legend-item">RSI &lt; 30 = Oversold (entry) &nbsp;|&nbsp; RSI &gt; 70 = Overbought (exit)</div>
+                    <div class="legend-item">ADX &gt; 30 = Strong trend &nbsp;|&nbsp; ADX &lt; 20 = Ranging / No direction</div>
+                    <div class="legend-item">Earnings &lt; 7d = Max risk, do not enter &nbsp;|&nbsp; &gt; 21d = Safe window</div>
+                    <div class="legend-item">RS-SPY &gt; 1.0 = Outperforming market &nbsp;|&nbsp; &lt; 1.0 = Lagging</div>
+                    <div class="legend-item">BB-BW &lt; 1.5% = Squeeze (wait for breakout) &nbsp;|&nbsp; &gt; 5% = Expanded</div>
+                </div>
+            </div>
+
+            <!-- TICKER SUMMARIES -->
+            <div class="mt-6">
+                <h2 class="text-lg font-bold text-white mb-3">Analysis per Ticker</h2>
+                <div id="summary-container"></div>
+            </div>
+        </main>
+
+        <!-- FOOTER -->
+        <footer class="border-t border-gray-800 px-6 py-3 mt-4">
+            <div class="flex items-center justify-between max-w-[1600px] mx-auto text-sm text-gray-500">
+                <span>Source: Financial Modeling Prep API</span>
+                <span>Calculations run client-side in your browser</span>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Scripts (order matters) -->
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/technicals.js"></script>
+    <script src="js/structure.js"></script>
+    <script src="js/scoring.js"></script>
+    <script src="js/charts.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
