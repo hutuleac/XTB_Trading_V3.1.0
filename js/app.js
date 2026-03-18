@@ -1,6 +1,6 @@
 // ============================================================
 // APP — Main orchestrator
-// @version 3.2.0
+// @version 3.2.3
 // @updated 2026-03-18
 // ============================================================
 
@@ -20,7 +20,7 @@ const App = {
         if (cache && cache.marketData && cache.chartData) {
             const ageMs = Date.now() - new Date(cache.timestamp).getTime();
             const ageHours = ageMs / 3600000;
-            UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, cache.vixValue, true, ageHours);
+            UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, null, true, ageHours, null);
             return;
         }
 
@@ -41,7 +41,7 @@ const App = {
                 if (cache && cache.marketData) {
                     // Fallback: show cached data with warning
                     const ageHours = (Date.now() - new Date(cache.timestamp).getTime()) / 3600000;
-                    UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, cache.vixValue, true, ageHours);
+                    UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, null, true, ageHours, null);
                     UI.showCacheBanner("API validation failed — showing cached data. Fix keys in Settings.");
                     return;
                 }
@@ -52,24 +52,24 @@ const App = {
             // 1. Fetch all OHLCV — Twelve Data batch (chunked if >8 symbols)
             UI.updateLoadingProgress("Fetching OHLCV data (Twelve Data)...");
             let ohlcvBatch = {};
-            let vixValue = null;
 
             try {
                 ohlcvBatch = await API.fetchAllOHLCV(tickers, (msg) => UI.updateLoadingProgress(msg));
-                const vixData = ohlcvBatch["VIX"] || [];
-                vixValue = vixData.length > 0 ? vixData[vixData.length - 1].close : null;
             } catch (e) {
                 console.warn("Twelve Data batch failed:", e.message);
                 const cache = getCache();
                 if (cache && cache.marketData) {
                     const ageHours = (Date.now() - new Date(cache.timestamp).getTime()) / 3600000;
-                    UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, cache.vixValue, true, ageHours);
+                    UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, null, true, ageHours, null);
                     UI.showCacheBanner(`Twelve Data unavailable (${e.message}) — showing cached data.`);
                     return;
                 }
                 UI.showError(`Twelve Data error: ${e.message}\n\nNo cached data available. Please try again later.`, true);
                 return;
             }
+
+            // Fear & Greed index (non-critical, may fail due to CORS on some setups)
+            const fgData = null;  // CNN API not reliably accessible from browser — use button link
 
             const spyCloses = (ohlcvBatch[CONFIG.BENCHMARK] || []).map(d => d.close);
 
@@ -132,11 +132,11 @@ const App = {
             }
 
             // 4. Save to cache
-            setCache({ marketData, chartData, vixValue });
+            setCache({ marketData, chartData, fgData });
 
             // 5. Render
             const timestamp = new Date().toLocaleString();
-            UI.renderDashboard(marketData, chartData, timestamp, vixValue, false, 0);
+            UI.renderDashboard(marketData, chartData, timestamp, null, false, 0, fgData);
 
         } catch (e) {
             console.error("Dashboard load error:", e);
@@ -276,6 +276,10 @@ const App = {
         data.setup_total_criteria = setup.total_criteria;
         data.setup_sizing_pct = setup.sizing_pct;
         data.setup_reasons = setup.reasons;
+        data.setup_long_met = setup.long_met || [];
+        data.setup_long_miss = setup.long_miss || [];
+        data.setup_short_met = setup.short_met || [];
+        data.setup_short_miss = setup.short_miss || [];
 
         // Chart data (last CHART_DAYS)
         const chartDays = CONFIG.CHART_DAYS;

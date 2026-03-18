@@ -1,7 +1,7 @@
 // ============================================================
 // SCORING — Composite score & confluence setup detection
-// @version 3.1.0
-// @updated 2026-03-16
+// @version 3.2.1
+// @updated 2026-03-18
 // ============================================================
 
 const Scoring = {
@@ -133,6 +133,7 @@ const Scoring = {
 
     /**
      * Determine trading setup based on confluence.
+     * Returns full met/miss breakdown for all directions.
      */
     getConfluenceSetup(d) {
         const price = d.price;
@@ -147,51 +148,136 @@ const Scoring = {
         const ema50 = d.ema50;
         const bbBW = d.bb_bandwidth;
 
-        // WAIT checks
-        const waitReasons = [];
-        if (daysEarn != null && daysEarn < 10) waitReasons.push(`Earnings in ${daysEarn} days`);
-        if (atrPct != null && atrPct > 5) waitReasons.push(`ATR% extreme (${atrPct}%)`);
-        if (structure === "Neutral" && adx != null && adx < 20) waitReasons.push("No direction (Neutral + ADX < 20)");
-        if (price && ema50 && ema200 && Math.min(ema50, ema200) < price && price < Math.max(ema50, ema200)) {
-            waitReasons.push("Price between EMA50 and EMA200");
-        }
-        if (bbBW != null && bbBW < 1.5) waitReasons.push(`BB squeeze (${bbBW}%)`);
-        if (rsi != null && rsi > 75 && fibPos === "ABOVE_786") waitReasons.push("RSI overbought + Fib extended");
+        // Formatting helpers (local, no UI dependency)
+        const fp = v => (v != null ? Number(v).toFixed(2) : "?");
+        const fr = v => (v != null ? Number(v).toFixed(1) : "?");
+        const fibShort = v => v
+            ? v.replace("BETWEEN_", "").replace("ABOVE_", ">").replace("BELOW_", "<").replace("_", "-")
+            : "N/A";
 
-        const epsG = d.eps_growth_yoy;
-        const peFwd = d.pe_forward;
-        const peTrail = d.pe_trailing;
-        if (epsG != null && epsG < 0 && peFwd != null && peTrail != null && peFwd > peTrail) {
-            waitReasons.push("Fundamental deterioration");
+        // ── Always build full LONG criteria (met + miss) ─────────────────
+        const longMet = [], longMiss = [];
+
+        if (price && ema200 && price > ema200) {
+            longMet.push("Price > EMA200");
+        } else {
+            longMiss.push(`Price > EMA200 ($${fp(price)} vs $${fp(ema200)})`);
         }
 
-        if (waitReasons.length > 0) {
-            return { setup_type: "WAIT", criteria_met: 0, total_criteria: 0, sizing_pct: 0, reasons: waitReasons };
+        if (rsi != null && rsi >= 35 && rsi <= 55) {
+            longMet.push(`RSI ${fr(rsi)} in 35-55`);
+        } else {
+            longMiss.push(`RSI 35-55 zone (now ${fr(rsi)})`);
         }
 
-        // LONG (6 criteria)
-        const longMet = [];
-        if (price && ema200 && price > ema200) longMet.push("Price > EMA200");
-        if (rsi != null && rsi >= 35 && rsi <= 55) longMet.push(`RSI ${rsi} in 35-55 zone`);
-        if (structure === "Bullish") longMet.push("Structure Bullish");
-        if (price && avwap30 && price > avwap30) longMet.push("Price > AVWAP 30d");
-        if (fibPos === "BETWEEN_382_618" || fibPos === "BETWEEN_236_382") longMet.push(`Fib value zone (${fibPos})`);
-        if (adx != null) {
-            if (adx < 25 || (adx > 30 && structure === "Bullish")) longMet.push(`ADX ${adx} favorable`);
+        if (structure === "Bullish") {
+            longMet.push("Structure Bullish");
+        } else {
+            longMiss.push(`Structure Bullish (now ${structure || "N/A"})`);
         }
 
-        // SHORT (6 criteria)
-        const shortMet = [];
-        if (price && ema200 && price < ema200) shortMet.push("Price < EMA200");
-        if (rsi != null && rsi >= 45 && rsi <= 65) shortMet.push(`RSI ${rsi} in 45-65 zone`);
-        if (structure === "Bearish") shortMet.push("Structure Bearish");
-        if (price && avwap30 && price < avwap30) shortMet.push("Price < AVWAP 30d");
-        if (fibPos === "BETWEEN_618_786" || fibPos === "ABOVE_786") shortMet.push(`Fib rejection zone (${fibPos})`);
-        if (adx != null && adx > 20) shortMet.push(`ADX ${adx} trending`);
+        if (price && avwap30 && price > avwap30) {
+            longMet.push(`Price > AVWAP30d ($${fp(avwap30)})`);
+        } else {
+            longMiss.push(`Price > AVWAP30d ($${fp(price)} vs $${fp(avwap30)})`);
+        }
+
+        if (fibPos === "BETWEEN_382_618" || fibPos === "BETWEEN_236_382") {
+            longMet.push(`Fib value zone (${fibShort(fibPos)})`);
+        } else {
+            longMiss.push(`Fib value zone (now ${fibShort(fibPos)})`);
+        }
+
+        if (adx != null && (adx < 25 || (adx > 30 && structure === "Bullish"))) {
+            longMet.push(`ADX ${fr(adx)} favorable`);
+        } else {
+            longMiss.push(`ADX favorable (now ${fr(adx)})`);
+        }
+
+        // ── Always build full SHORT criteria (met + miss) ─────────────────
+        const shortMet = [], shortMiss = [];
+
+        if (price && ema200 && price < ema200) {
+            shortMet.push("Price < EMA200");
+        } else {
+            shortMiss.push(`Price < EMA200 ($${fp(price)} vs $${fp(ema200)})`);
+        }
+
+        if (rsi != null && rsi >= 45 && rsi <= 65) {
+            shortMet.push(`RSI ${fr(rsi)} in 45-65`);
+        } else {
+            shortMiss.push(`RSI 45-65 zone (now ${fr(rsi)})`);
+        }
+
+        if (structure === "Bearish") {
+            shortMet.push("Structure Bearish");
+        } else {
+            shortMiss.push(`Structure Bearish (now ${structure || "N/A"})`);
+        }
+
+        if (price && avwap30 && price < avwap30) {
+            shortMet.push(`Price < AVWAP30d ($${fp(avwap30)})`);
+        } else {
+            shortMiss.push(`Price < AVWAP30d ($${fp(price)} vs $${fp(avwap30)})`);
+        }
+
+        if (fibPos === "BETWEEN_618_786" || fibPos === "ABOVE_786") {
+            shortMet.push(`Fib rejection zone (${fibShort(fibPos)})`);
+        } else {
+            shortMiss.push(`Fib rejection zone (now ${fibShort(fibPos)})`);
+        }
+
+        if (adx != null && adx > 20) {
+            shortMet.push(`ADX ${fr(adx)} > 20 trending`);
+        } else {
+            shortMiss.push(`ADX > 20 trending (now ${fr(adx)})`);
+        }
 
         const longCount = longMet.length;
         const shortCount = shortMet.length;
 
+        // ── Hard WAIT checks (market condition blockers) ──────────────────
+        const waitReasons = [];
+        if (daysEarn != null && daysEarn < 10) {
+            waitReasons.push(`Earnings in ${daysEarn}d — avoid trading until after`);
+        }
+        if (atrPct != null && atrPct > 5) {
+            waitReasons.push(`Extreme volatility — ATR ${Number(atrPct).toFixed(2)}% exceeds 5% threshold`);
+        }
+        if (structure === "Neutral" && adx != null && adx < 20) {
+            waitReasons.push(`No directional trend — Neutral structure + ADX ${fr(adx)} < 20`);
+        }
+        if (price && ema50 && ema200 && Math.min(ema50, ema200) < price && price < Math.max(ema50, ema200)) {
+            waitReasons.push(`Price trapped between EMA50 ($${fp(ema50)}) and EMA200 ($${fp(ema200)})`);
+        }
+        if (bbBW != null && bbBW < 1.5) {
+            waitReasons.push(`Bollinger Band squeeze — BW ${Number(bbBW).toFixed(2)}% (threshold: 1.5%)`);
+        }
+        if (rsi != null && rsi > 75 && fibPos === "ABOVE_786") {
+            waitReasons.push("RSI overbought + price extended above Fib 78.6%");
+        }
+        const epsG = d.eps_growth_yoy;
+        const peFwd = d.pe_forward;
+        const peTrail = d.pe_trailing;
+        if (epsG != null && epsG < 0 && peFwd != null && peTrail != null && peFwd > peTrail) {
+            waitReasons.push(`Fundamental deterioration — EPS ${Number(epsG).toFixed(1)}% + Fwd P/E (${fp(peFwd)}) > Trail P/E (${fp(peTrail)})`);
+        }
+
+        if (waitReasons.length > 0) {
+            return {
+                setup_type: "WAIT",
+                criteria_met: 0,
+                total_criteria: 0,
+                sizing_pct: 0,
+                reasons: waitReasons,
+                long_met: longMet,
+                long_miss: longMiss,
+                short_met: shortMet,
+                short_miss: shortMiss,
+            };
+        }
+
+        // ── LONG signal ───────────────────────────────────────────────────
         if (longCount >= 4 && longCount >= shortCount) {
             return {
                 setup_type: "LONG",
@@ -199,8 +285,14 @@ const Scoring = {
                 total_criteria: 6,
                 sizing_pct: longCount >= 5 ? 100 : 60,
                 reasons: longMet,
+                long_met: longMet,
+                long_miss: longMiss,
+                short_met: shortMet,
+                short_miss: shortMiss,
             };
         }
+
+        // ── SHORT signal ──────────────────────────────────────────────────
         if (shortCount >= 4) {
             return {
                 setup_type: "SHORT",
@@ -208,15 +300,25 @@ const Scoring = {
                 total_criteria: 6,
                 sizing_pct: shortCount >= 5 ? 100 : 60,
                 reasons: shortMet,
+                long_met: longMet,
+                long_miss: longMiss,
+                short_met: shortMet,
+                short_miss: shortMiss,
             };
         }
 
+        // ── WAIT — insufficient confluence ────────────────────────────────
+        const closer = longCount > shortCount ? "LONG" : longCount < shortCount ? "SHORT" : "neither";
         return {
             setup_type: "WAIT",
             criteria_met: Math.max(longCount, shortCount),
             total_criteria: 6,
             sizing_pct: 0,
-            reasons: [`Insufficient confluence (L:${longCount}/6, S:${shortCount}/6)`],
+            reasons: [`Insufficient confluence — LONG ${longCount}/6, SHORT ${shortCount}/6`],
+            long_met: longMet,
+            long_miss: longMiss,
+            short_met: shortMet,
+            short_miss: shortMiss,
         };
     },
 };

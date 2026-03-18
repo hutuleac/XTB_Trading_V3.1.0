@@ -1,6 +1,6 @@
 // ============================================================
 // API — Finnhub + Twelve Data fetching (browser-side)
-// @version 3.2.0
+// @version 3.2.3
 // @updated 2026-03-18
 // ============================================================
 
@@ -30,6 +30,8 @@ const API = {
         params.token = key;
         const qs = new URLSearchParams(params).toString();
         const url = `${CONFIG.FINNHUB_URL}${path}?${qs}`;
+        // DIAGNOSTIC: full URL with key hidden (remove after debugging)
+        console.debug(`[Finnhub] ${path} → ${url.replace(key, "KEY_HIDDEN")} | prefix="${key.slice(0,6)}" len=${key.length}`);
         const resp = await this.fetchWithTimeout(url);
         if (!resp.ok) {
             if (resp.status === 401 || resp.status === 403)
@@ -192,30 +194,85 @@ const API = {
             console.log(`TD chunk ${Math.floor(i / CREDITS_PER_MIN) + 1}: ${chunk.map(s => `${s}=${result[s]?.length ?? 0}`).join(", ")}`);
         }
 
-        // Best-effort VIX fetch (only if we have remaining budget in this minute,
-        // i.e., if we only used 1 chunk = ≤ 7 tickers + SPY)
-        if (coreSymbols.length < CREDITS_PER_MIN) {
-            try {
-                const vixData = await this.twelveDataGet("/time_series", {
-                    symbol: "VIX",
-                    interval: "1day",
-                    outputsize: "30",   // Only need recent VIX, saves bandwidth
-                });
-                result["VIX"] = this.parseTwelveDataOHLCV(vixData.status === "error" ? null : vixData, "VIX");
-            } catch (e) {
-                console.info("VIX fetch skipped:", e.message);
-                result["VIX"] = [];
-            }
-        } else {
-            result["VIX"] = [];  // Too many tickers — skip VIX to avoid exceeding credits
-        }
-
+        // VIX removed from TD batch — no longer needed (saves 1 credit/refresh)
         return result;
     },
 
     // ── Fetch SPY benchmark (from pre-fetched batch) ─────────
     async fetchBenchmark(ohlcvBatch) {
         return (ohlcvBatch && ohlcvBatch[CONFIG.BENCHMARK]) || [];
+    },
+
+    // ── VIX from Yahoo Finance (fallback when TD VIX is unavailable) ─────
+    async fetchVIX() {
+        try {
+            const resp = await this.fetchWithTimeout(
+                "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=5d",
+                10000
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+            if (Array.isArray(closes) && closes.length > 0) {
+                // Find last non-null close
+                const lastClose = [...closes].reverse().find(v => v != null);
+                if (lastClose != null) {
+                    console.log(`[VIX] Yahoo Finance → ${lastClose.toFixed(2)}`);
+                    return lastClose;
+                }
+            }
+        } catch (e) {
+            console.info("[VIX] Yahoo Finance unavailable:", e.message);
+        }
+        return null;
+    },
+
+    // ── CNN Fear & Greed Index (overall + 7 sub-indicators) ──────────────
+    async fetchFearGreed() {
+        try {
+            const resp = await this.fetchWithTimeout(
+                "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+                8000
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            const fg = data?.fear_and_greed;
+            if (!fg || fg.score == null) return null;
+
+            // Parse a single indicator object from the CNN response
+            const parseInd = obj => {
+                if (!obj) return null;
+                const score = obj.score ?? obj.value;
+                if (score == null) return null;
+                return {
+                    score: Math.round(Number(score)),
+                    rating: obj.rating ?? obj.description ?? "",
+                    data:   obj.data ?? "",
+                };
+            };
+
+            const gi = data.greed_indicators || {};
+            return {
+                score:      Math.round(fg.score),
+                rating:     fg.rating || "",
+                prev_close: fg.previous_close   != null ? Math.round(fg.previous_close)   : null,
+                prev_week:  fg.previous_1_week  != null ? Math.round(fg.previous_1_week)  : null,
+                prev_month: fg.previous_1_month != null ? Math.round(fg.previous_1_month) : null,
+                prev_year:  fg.previous_1_year  != null ? Math.round(fg.previous_1_year)  : null,
+                indicators: {
+                    momentum: parseInd(gi.market_momentum_sp500),
+                    strength: parseInd(gi.stock_price_strength),
+                    breadth:  parseInd(gi.stock_price_breadth),
+                    pcr:      parseInd(gi.put_call_options),
+                    vix_fg:   parseInd(gi.market_volatility_vix),
+                    haven:    parseInd(gi.safe_haven_demand),
+                    junk:     parseInd(gi.junk_bond_demand),
+                },
+            };
+        } catch (e) {
+            console.info("[F&G] CNN Fear & Greed unavailable:", e.message);
+        }
+        return null;
     },
 
     // ── Finnhub: earnings date for a ticker ──────────────────
@@ -318,8 +375,16 @@ const API = {
                 sector: p.finnhubIndustry || null,
             },
             earnings: earn,
-            eps_growth_yoy: m.epsGrowthTTMYoy != null
-                            ? Math.round(m.epsGrowthTTMYoy * 10000) / 100 : null,
+            // Finnhub returns epsGrowthTTMYoy already as percentage (e.g. 25.5 = +25.5%).
+            // Extreme values (±hundreds) are valid for fintech stocks with near-zero baseline EPS.
+            // Open DevTools Console to see the raw Finnhub value for each ticker.
+            eps_growth_yoy: (() => {
+                if (m.epsGrowthTTMYoy == null) return null;
+                const rounded = Math.round(m.epsGrowthTTMYoy * 100) / 100;
+                if (Math.abs(rounded) > 200)
+                    console.log(`[EPS debug] ${ticker} epsGrowthTTMYoy raw=${m.epsGrowthTTMYoy} → stored=${rounded}%`);
+                return rounded;
+            })(),
             short_ratio: m.shortRatio != null ? m.shortRatio : null,
             analyst_rating: this.mapConsensus(rec),
             price_target_upside: priceTargetUpside,
