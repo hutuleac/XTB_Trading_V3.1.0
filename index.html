@@ -93,7 +93,8 @@
         }
         .overlay-card {
             background: #161922; border: 1px solid #282d3e; border-radius: 16px;
-            padding: 32px 40px; max-width: 520px; width: 90%;
+            padding: 32px 40px; max-width: 560px; width: 90%;
+            max-height: 90vh; overflow-y: auto;
         }
         .overlay-card h2 { font-size: 24px; font-weight: 700; color: #e2e8f0; margin-bottom: 8px; }
         .overlay-card p { font-size: 14px; color: #94a3b8; margin-bottom: 20px; }
@@ -104,6 +105,7 @@
             outline: none; transition: border-color 0.15s;
         }
         .overlay-card input:focus, .overlay-card textarea:focus { border-color: #3b82f6; }
+        .overlay-card .api-hint { font-size: 12px; color: #64748b; margin-top: -12px; margin-bottom: 14px; }
         .btn-primary {
             background: #3b82f6; color: white; border: none; border-radius: 8px;
             padding: 10px 24px; font-size: 15px; font-weight: 600; cursor: pointer;
@@ -125,6 +127,12 @@
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+        /* Cache banner */
+        #cache-banner {
+            background: #1e2231; border-bottom: 1px solid #3b4260;
+            color: #94a3b8; font-size: 13px; text-align: center; padding: 6px 16px;
+        }
+
         .hidden { display: none !important; }
     </style>
 </head>
@@ -134,11 +142,19 @@
     <div id="setup-overlay" class="overlay hidden">
         <div class="overlay-card">
             <h2>📊 Stock Market Dashboard</h2>
-            <p>Welcome! Enter your <a href="https://financialmodelingprep.com/developer/docs/" target="_blank" style="color:#3b82f6; text-decoration:underline;">Financial Modeling Prep</a> API key to get started. Free tier gives you 250 requests/day.</p>
-            <label for="setup-api-key">FMP API Key</label>
-            <input type="text" id="setup-api-key" placeholder="Your FMP API key...">
-            <label for="setup-tickers">Watchlist (comma-separated)</label>
+            <p>Enter your API keys to get started. Both are required — Finnhub for live quotes & fundamentals, Twelve Data for OHLCV history.</p>
+
+            <label for="setup-finnhub-key">Finnhub API Key</label>
+            <input type="text" id="setup-finnhub-key" placeholder="pk_xxxxxxxxxxxxxxxxxxxx">
+            <div class="api-hint">Free tier: 60 req/min · <a href="https://finnhub.io/" target="_blank" style="color:#3b82f6;">finnhub.io</a></div>
+
+            <label for="setup-twelve-key">Twelve Data API Key</label>
+            <input type="text" id="setup-twelve-key" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+            <div class="api-hint">Free tier: 8 req/min, 800 credits/day · <a href="https://twelvedata.com/" target="_blank" style="color:#3b82f6;">twelvedata.com</a></div>
+
+            <label for="setup-tickers">Watchlist (comma-separated, max 12)</label>
             <input type="text" id="setup-tickers" placeholder="TSLA, HOOD, SOFI, AMZN, SKM, GOOGL" value="TSLA, HOOD, SOFI, AMZN, SKM, GOOGL">
+
             <div class="flex gap-3 mt-2">
                 <button class="btn-primary" onclick="UI.saveInitialSetup()">Launch Dashboard</button>
             </div>
@@ -149,11 +165,17 @@
     <div id="settings-overlay" class="overlay hidden">
         <div class="overlay-card">
             <h2>⚙️ Settings</h2>
-            <p>Update your API key and watchlist. Changes take effect on next refresh.</p>
-            <label for="api-key-input">FMP API Key</label>
-            <input type="text" id="api-key-input" placeholder="Your FMP API key...">
-            <label for="tickers-input">Watchlist (comma-separated)</label>
+            <p>Update your API keys and watchlist. Changes clear the cache and trigger a full refresh.</p>
+
+            <label for="finnhub-key-input">Finnhub API Key</label>
+            <input type="text" id="finnhub-key-input" placeholder="pk_xxxxxxxxxxxxxxxxxxxx">
+
+            <label for="twelve-key-input">Twelve Data API Key</label>
+            <input type="text" id="twelve-key-input" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+
+            <label for="tickers-input">Watchlist (comma-separated, max 12)</label>
             <input type="text" id="tickers-input" placeholder="TSLA, HOOD, SOFI, AMZN, SKM, GOOGL">
+
             <div class="flex gap-3 mt-2">
                 <button class="btn-primary" onclick="UI.saveSettings()">Save & Refresh</button>
                 <button class="btn-secondary" onclick="UI.hideSettings()">Cancel</button>
@@ -170,6 +192,10 @@
 
     <!-- DASHBOARD -->
     <div id="dashboard-content" class="hidden">
+
+        <!-- CACHE BANNER -->
+        <div id="cache-banner" class="hidden"></div>
+
         <!-- HEADER -->
         <header class="border-b border-gray-800 px-6 py-4">
             <div class="flex items-center justify-between max-w-[1600px] mx-auto">
@@ -178,10 +204,11 @@
                     <p class="text-base text-gray-400 mt-0.5" id="header-timestamp"></p>
                 </div>
                 <div class="flex items-center gap-3">
+                    <span id="vix-badge" class="px-3 py-1 rounded text-sm font-semibold bg-surface-700 text-gray-400">VIX: —</span>
                     <span class="text-sm text-gray-500" id="ticker-count"></span>
-                    <button class="btn-secondary" style="padding:6px 14px; font-size:13px;" onclick="App.loadDashboard()">↻ Refresh</button>
+                    <button class="btn-secondary" style="padding:6px 14px; font-size:13px;" onclick="App.refreshData()">↻ Refresh</button>
                     <button class="btn-secondary" style="padding:6px 14px; font-size:13px;" onclick="UI.showSettings()">⚙ Settings</button>
-                    <span class="px-3 py-1 bg-surface-700 rounded text-sm text-gray-300">v3.1.0</span>
+                    <span class="px-3 py-1 bg-surface-700 rounded text-sm text-gray-300">v3.2.0</span>
                 </div>
             </div>
         </header>
@@ -215,7 +242,7 @@
                     <span class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Technical & Fundamental Details</span>
                 </div>
                 <div style="overflow-x: auto;">
-                    <table class="text-[13px]" style="min-width: 1200px;">
+                    <table class="text-[13px]" style="min-width: 1600px;">
                         <thead>
                             <tr class="text-gray-500 bg-surface-900">
                                 <th class="px-2 py-2.5 text-left font-medium bg-surface-900">Symbol</th>
@@ -235,8 +262,13 @@
                                 <th class="px-2 py-2.5 text-right font-medium bg-surface-900">P/E</th>
                                 <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Fwd P/E</th>
                                 <th class="px-2 py-2.5 text-right font-medium bg-surface-900">EPS-G</th>
-                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Short%</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Short Ratio</th>
                                 <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Beta</th>
+                                <th class="px-2 py-2.5 text-center font-medium bg-surface-900">MACD</th>
+                                <th class="px-2 py-2.5 text-center font-medium bg-surface-900">OBV</th>
+                                <th class="px-2 py-2.5 text-center font-medium bg-surface-900">R1 / S1</th>
+                                <th class="px-2 py-2.5 text-right font-medium bg-surface-900">Target↑%</th>
+                                <th class="px-2 py-2.5 text-left font-medium bg-surface-900">Analyst Action</th>
                             </tr>
                         </thead>
                         <tbody id="detail-table-body"></tbody>
@@ -260,7 +292,8 @@
                     <div class="legend-item">ADX &gt; 30 = Strong trend &nbsp;|&nbsp; ADX &lt; 20 = Ranging / No direction</div>
                     <div class="legend-item">Earnings &lt; 7d = Max risk, do not enter &nbsp;|&nbsp; &gt; 21d = Safe window</div>
                     <div class="legend-item">RS-SPY &gt; 1.0 = Outperforming market &nbsp;|&nbsp; &lt; 1.0 = Lagging</div>
-                    <div class="legend-item">BB-BW &lt; 1.5% = Squeeze (wait for breakout) &nbsp;|&nbsp; &gt; 5% = Expanded</div>
+                    <div class="legend-item">Short Ratio &gt; 5d = Elevated &nbsp;|&nbsp; &gt; 10d = Squeeze territory</div>
+                    <div class="legend-item">VIX &lt; 15 = Low fear &nbsp;|&nbsp; 20-30 = Elevated &nbsp;|&nbsp; &gt; 30 = High fear / opportunity</div>
                 </div>
             </div>
 
@@ -274,20 +307,20 @@
         <!-- FOOTER -->
         <footer class="border-t border-gray-800 px-6 py-3 mt-4">
             <div class="flex items-center justify-between max-w-[1600px] mx-auto text-sm text-gray-500">
-                <span>Source: Financial Modeling Prep API</span>
-                <span>Calculations run client-side in your browser</span>
+                <span>Sources: Finnhub (quotes, fundamentals) · Twelve Data (OHLCV)</span>
+                <span>All technical indicators calculated client-side</span>
             </div>
         </footer>
     </div>
 
     <!-- Scripts (order matters) -->
-    <script src="js/config.js"></script>
-    <script src="js/api.js"></script>
-    <script src="js/technicals.js"></script>
-    <script src="js/structure.js"></script>
-    <script src="js/scoring.js"></script>
-    <script src="js/charts.js"></script>
-    <script src="js/ui.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/config.js?v=3.2.0"></script>
+    <script src="js/api.js?v=3.2.1"></script>
+    <script src="js/technicals.js?v=3.2.0"></script>
+    <script src="js/structure.js?v=3.2.0"></script>
+    <script src="js/scoring.js?v=3.2.0"></script>
+    <script src="js/charts.js?v=3.2.0"></script>
+    <script src="js/ui.js?v=3.2.0"></script>
+    <script src="js/app.js?v=3.2.0"></script>
 </body>
 </html>

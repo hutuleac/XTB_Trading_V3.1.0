@@ -338,4 +338,115 @@ const Technicals = {
         if (high52w == null || high52w === 0) return null;
         return Math.round((1 - price / high52w) * 10000) / 100;
     },
+
+    /**
+     * Calculate MACD (Moving Average Convergence Divergence).
+     * Returns { macd, signal, hist, crossover }
+     */
+    calcMACD(closes, fast, slow, signalPeriod) {
+        fast = fast || CONFIG.MACD_FAST;
+        slow = slow || CONFIG.MACD_SLOW;
+        signalPeriod = signalPeriod || CONFIG.MACD_SIGNAL;
+
+        if (closes.length < slow + signalPeriod) {
+            return { macd: null, signal: null, hist: null, crossover: null };
+        }
+
+        const ema12 = this.calcEMASeries(closes, fast);
+        const ema26 = this.calcEMASeries(closes, slow);
+
+        // MACD line = EMA12 - EMA26
+        const macdLine = closes.map((_, i) =>
+            (ema12[i] !== null && ema26[i] !== null) ? ema12[i] - ema26[i] : null
+        );
+
+        // Signal line = EMA(signalPeriod) of MACD line (using only non-null values)
+        const firstValid = macdLine.findIndex(v => v !== null);
+        const signalLine = new Array(closes.length).fill(null);
+        if (firstValid >= 0) {
+            const macdValues = macdLine.slice(firstValid);
+            const sigSeries = this.calcEMASeries(macdValues, signalPeriod);
+            for (let i = 0; i < sigSeries.length; i++) {
+                signalLine[firstValid + i] = sigSeries[i];
+            }
+        }
+
+        const len = closes.length;
+        const lastMacd = macdLine[len - 1];
+        const lastSig = signalLine[len - 1];
+        const prevMacd = macdLine[len - 2];
+        const prevSig = signalLine[len - 2];
+
+        let crossover = null;
+        if (lastMacd !== null && lastSig !== null && prevMacd !== null && prevSig !== null) {
+            if (prevMacd <= prevSig && lastMacd > lastSig) crossover = "BULL";
+            else if (prevMacd >= prevSig && lastMacd < lastSig) crossover = "BEAR";
+        }
+
+        const hist = (lastMacd !== null && lastSig !== null) ? lastMacd - lastSig : null;
+
+        return {
+            macd: lastMacd !== null ? Math.round(lastMacd * 1000) / 1000 : null,
+            signal: lastSig !== null ? Math.round(lastSig * 1000) / 1000 : null,
+            hist: hist !== null ? Math.round(hist * 1000) / 1000 : null,
+            crossover,
+        };
+    },
+
+    /**
+     * Calculate OBV (On Balance Volume).
+     * Returns { obv_current, obv_trend }
+     */
+    calcOBV(closes, volumes) {
+        if (closes.length < 2) return { obv_current: null, obv_trend: null };
+
+        let obv = 0;
+        const obvSeries = [0];
+        for (let i = 1; i < closes.length; i++) {
+            if (closes[i] > closes[i - 1]) obv += volumes[i];
+            else if (closes[i] < closes[i - 1]) obv -= volumes[i];
+            obvSeries.push(obv);
+        }
+
+        // Trend: 5-day OBV avg vs 20-day OBV avg
+        const len = obvSeries.length;
+        const w5 = Math.min(5, len);
+        const w20 = Math.min(20, len);
+        let sum5 = 0, sum20 = 0;
+        for (let i = len - w5; i < len; i++) sum5 += obvSeries[i];
+        for (let i = len - w20; i < len; i++) sum20 += obvSeries[i];
+        const avg5 = sum5 / w5;
+        const avg20 = sum20 / w20;
+
+        let trend;
+        if (avg5 > avg20 * 1.01) trend = "UP";
+        else if (avg5 < avg20 * 0.99) trend = "DOWN";
+        else trend = "FLAT";
+
+        return { obv_current: Math.round(obv), obv_trend: trend };
+    },
+
+    /**
+     * Calculate daily pivot points (S1, Pivot, R1) from previous day's OHLC.
+     * Returns { pivot, r1, s1 }
+     */
+    calcPivots(highs, lows, closes) {
+        const len = closes.length;
+        if (len < 2) return { pivot: null, r1: null, s1: null };
+
+        // Use previous candle (len-2) as "yesterday"
+        const H = highs[len - 2];
+        const L = lows[len - 2];
+        const C = closes[len - 2];
+
+        const pivot = (H + L + C) / 3;
+        const r1 = 2 * pivot - L;
+        const s1 = 2 * pivot - H;
+
+        return {
+            pivot: Math.round(pivot * 100) / 100,
+            r1: Math.round(r1 * 100) / 100,
+            s1: Math.round(s1 * 100) / 100,
+        };
+    },
 };

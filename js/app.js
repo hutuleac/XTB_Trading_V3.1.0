@@ -1,75 +1,113 @@
 // ============================================================
 // APP — Main orchestrator
-// @version 3.1.0
-// @updated 2026-03-16
+// @version 3.2.0
+// @updated 2026-03-18
 // ============================================================
 
 const App = {
+
     async loadDashboard() {
-        const apiKey = getApiKey();
-        if (!apiKey) {
+        const finnhubKey = getFinnhubKey();
+        const twelveKey = getTwelveDataKey();
+
+        if (!finnhubKey || !twelveKey) {
             UI.showSetupScreen();
             return;
         }
 
+        // If we have cache, show it immediately (no loading spinner)
+        const cache = getCache();
+        if (cache && cache.marketData && cache.chartData) {
+            const ageMs = Date.now() - new Date(cache.timestamp).getTime();
+            const ageHours = ageMs / 3600000;
+            UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, cache.vixValue, true, ageHours);
+            return;
+        }
+
+        // No cache — do a full fresh load
+        await App.refreshData();
+    },
+
+    async refreshData() {
         const tickers = getTickers();
-        UI.showLoading(`Validating API key...`);
+        UI.showLoading("Connecting to data sources...");
 
         try {
-            // 0. Validate API key first
+            // 0. Validate both API keys
+            UI.updateLoadingProgress("Validating API keys (Finnhub + Twelve Data)...");
             const validation = await API.validateApiKey();
             if (!validation.valid) {
-                console.error("API key validation failed:", validation.error);
-                UI.showError(
-                    `API key validation failed: ${validation.error}`,
-                    true // show change key button
-                );
+                const cache = getCache();
+                if (cache && cache.marketData) {
+                    // Fallback: show cached data with warning
+                    const ageHours = (Date.now() - new Date(cache.timestamp).getTime()) / 3600000;
+                    UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, cache.vixValue, true, ageHours);
+                    UI.showCacheBanner("API validation failed — showing cached data. Fix keys in Settings.");
+                    return;
+                }
+                UI.showError(`API key validation failed:\n${validation.error}`, true);
                 return;
             }
 
-            UI.showLoading(`Fetching data for ${tickers.length} tickers...`);
+            // 1. Fetch all OHLCV — Twelve Data batch (chunked if >8 symbols)
+            UI.updateLoadingProgress("Fetching OHLCV data (Twelve Data)...");
+            let ohlcvBatch = {};
+            let vixValue = null;
 
-            // 1. Fetch SPY benchmark
-            UI.updateLoadingProgress("Fetching SPY benchmark...");
-            let spyCloses = [];
             try {
-                const spyOHLCV = await API.fetchBenchmark();
-                spyCloses = spyOHLCV.map(d => d.close);
+                ohlcvBatch = await API.fetchAllOHLCV(tickers, (msg) => UI.updateLoadingProgress(msg));
+                const vixData = ohlcvBatch["VIX"] || [];
+                vixValue = vixData.length > 0 ? vixData[vixData.length - 1].close : null;
             } catch (e) {
-                console.warn("Could not fetch SPY benchmark:", e.message);
+                console.warn("Twelve Data batch failed:", e.message);
+                const cache = getCache();
+                if (cache && cache.marketData) {
+                    const ageHours = (Date.now() - new Date(cache.timestamp).getTime()) / 3600000;
+                    UI.renderDashboard(cache.marketData, cache.chartData, cache.timestamp, cache.vixValue, true, ageHours);
+                    UI.showCacheBanner(`Twelve Data unavailable (${e.message}) — showing cached data.`);
+                    return;
+                }
+                UI.showError(`Twelve Data error: ${e.message}\n\nNo cached data available. Please try again later.`, true);
+                return;
             }
 
-            // 2. Fetch all tickers in parallel
-            const marketData = {};
-            const chartData = {};
-            let completed = 0;
-            const tickerErrors = [];
+            const spyCloses = (ohlcvBatch[CONFIG.BENCHMARK] || []).map(d => d.close);
 
-            const results = await Promise.allSettled(
-                tickers.map(async (ticker) => {
-                    UI.updateLoadingProgress(`Fetching ${ticker}... (${completed}/${tickers.length})`);
-                    const raw = await API.fetchTickerData(ticker);
-                    completed++;
-                    UI.updateLoadingProgress(`Processing ${ticker}... (${completed}/${tickers.length})`);
-                    return { ticker, raw };
-                })
-            );
+            // 2. Fetch Finnhub data per ticker (batches of 6 to stay within 60 req/min)
+            const BATCH_SIZE = 6;
+            const allResults = [];
+
+            for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
+                const chunk = tickers.slice(i, i + BATCH_SIZE);
+                const rangeEnd = Math.min(i + BATCH_SIZE, tickers.length);
+                UI.updateLoadingProgress(`Fetching Finnhub data for tickers ${i + 1}–${rangeEnd} of ${tickers.length}...`);
+
+                const chunkResults = await Promise.allSettled(
+                    chunk.map(ticker => API.fetchTickerData(ticker, ohlcvBatch))
+                );
+                chunkResults.forEach((r, j) => allResults.push({ result: r, ticker: chunk[j] }));
+
+                // Pause between batches to respect rate limit
+                if (i + BATCH_SIZE < tickers.length) {
+                    await new Promise(res => setTimeout(res, 1500));
+                }
+            }
 
             // 3. Process each ticker
             UI.updateLoadingProgress("Calculating indicators...");
+            const marketData = {};
+            const chartData = {};
+            const tickerErrors = [];
 
-            for (const result of results) {
+            for (const { result, ticker } of allResults) {
                 if (result.status !== "fulfilled") {
-                    // Extract ticker name from error if possible
                     const errMsg = result.reason ? result.reason.message : "Unknown error";
-                    console.error(`Ticker fetch failed:`, errMsg);
-                    tickerErrors.push(errMsg);
+                    console.error(`Ticker fetch failed for ${ticker}:`, errMsg);
+                    tickerErrors.push(`${ticker}: ${errMsg}`);
                     continue;
                 }
-                const { ticker, raw } = result.value;
-
                 try {
-                    const processed = this.processTicker(ticker, raw, spyCloses);
+                    const processed = this.processTicker(ticker, result.value, spyCloses);
                     marketData[ticker] = processed.data;
                     chartData[ticker] = processed.chart;
                 } catch (e) {
@@ -79,28 +117,26 @@ const App = {
             }
 
             if (Object.keys(marketData).length === 0) {
-                // Build detailed error message
                 let errorMsg = "No data could be loaded for any ticker.";
                 if (tickerErrors.length > 0) {
                     const uniqueErrors = [...new Set(tickerErrors)];
                     errorMsg += "\n\nErrors:\n• " + uniqueErrors.slice(0, 5).join("\n• ");
-                    if (uniqueErrors.length > 5) {
-                        errorMsg += `\n• ... and ${uniqueErrors.length - 5} more`;
-                    }
+                    if (uniqueErrors.length > 5) errorMsg += `\n• ... and ${uniqueErrors.length - 5} more`;
                 }
-                console.error("All tickers failed. Errors:", tickerErrors);
                 UI.showError(errorMsg, true);
                 return;
             }
 
-            // Log partial failures
             if (tickerErrors.length > 0) {
-                console.warn(`${tickerErrors.length} ticker(s) failed:`, tickerErrors);
+                console.warn(`${tickerErrors.length} ticker(s) had issues:`, tickerErrors);
             }
 
-            // 4. Render
+            // 4. Save to cache
+            setCache({ marketData, chartData, vixValue });
+
+            // 5. Render
             const timestamp = new Date().toLocaleString();
-            UI.renderDashboard(marketData, chartData, timestamp);
+            UI.renderDashboard(marketData, chartData, timestamp, vixValue, false, 0);
 
         } catch (e) {
             console.error("Dashboard load error:", e);
@@ -123,17 +159,27 @@ const App = {
         const closes = ohlcv.map(d => d.close);
         const volumes = ohlcv.map(d => d.volume);
 
-        const price = closes[closes.length - 1];
-        const prevClose = profile.prev_close || (closes.length > 1 ? closes[closes.length - 2] : price);
-        const delta1d = prevClose ? Math.round(((price - prevClose) / prevClose) * 10000) / 100 : 0;
+        // Price: use Finnhub live quote if available, fall back to last OHLCV close
+        const price = profile.current_price || closes[closes.length - 1];
+
+        // 1D% change: use Finnhub's pre-calculated dp if available
+        let delta1d;
+        if (profile.quote_dp != null) {
+            delta1d = Math.round(profile.quote_dp * 100) / 100;
+        } else {
+            const prevClose = profile.prev_close || (closes.length > 1 ? closes[closes.length - 2] : price);
+            delta1d = prevClose ? Math.round(((price - prevClose) / prevClose) * 10000) / 100 : 0;
+        }
 
         // Technical indicators
         const rsi = Technicals.calcRSI(closes);
         const atrData = Technicals.calcATR(highs, lows, closes);
         const ema50Series = Technicals.calcEMASeries(closes, CONFIG.EMA_SHORT);
         const ema200Series = Technicals.calcEMASeries(closes, CONFIG.EMA_LONG);
-        const ema50 = ema50Series[ema50Series.length - 1] != null ? Math.round(ema50Series[ema50Series.length - 1] * 100) / 100 : null;
-        const ema200 = ema200Series[ema200Series.length - 1] != null ? Math.round(ema200Series[ema200Series.length - 1] * 100) / 100 : null;
+        const ema50 = ema50Series[ema50Series.length - 1] != null
+                      ? Math.round(ema50Series[ema50Series.length - 1] * 100) / 100 : null;
+        const ema200 = ema200Series[ema200Series.length - 1] != null
+                       ? Math.round(ema200Series[ema200Series.length - 1] * 100) / 100 : null;
         const trend = Technicals.calcTrend(closes, ema50Series, ema200Series);
 
         // AVWAPs
@@ -157,13 +203,18 @@ const App = {
         const rsSpy = Technicals.calcRSvsSPY(closes, spyCloses);
         const volRatio = Technicals.calcVolumeRatio(volumes);
 
+        // New indicators
+        const macd = Technicals.calcMACD(closes);
+        const obv = Technicals.calcOBV(closes, volumes);
+        const pivots = Technicals.calcPivots(highs, lows, closes);
+
         // From profile
         const high52w = profile.high_52w;
         const low52w = profile.low_52w;
         const pos52w = Technicals.calc52WPosition(price, high52w, low52w);
         const pctBelow = Technicals.calcPctBelowATH(price, high52w);
 
-        // Assemble data
+        // Assemble data object
         const data = {
             price: Math.round(price * 100) / 100,
             delta_1d_pct: delta1d,
@@ -193,6 +244,15 @@ const App = {
             position_52w_pct: pos52w,
             pct_below_ath: pctBelow,
             rs_spy_30d: rsSpy,
+            // New indicators
+            macd_val: macd.macd,
+            macd_signal: macd.signal,
+            macd_hist: macd.hist,
+            macd_crossover: macd.crossover,
+            obv_trend: obv.obv_trend,
+            pivot_r1: pivots.r1,
+            pivot_s1: pivots.s1,
+            // Fundamentals
             pe_trailing: profile.pe_trailing,
             pe_forward: profile.pe_forward,
             dividend_yield: profile.dividend_yield,
@@ -201,8 +261,10 @@ const App = {
             earnings_date: raw.earnings.earnings_date,
             days_to_earnings: raw.earnings.days_to_earnings,
             eps_growth_yoy: raw.eps_growth_yoy,
-            short_float_pct: raw.short_float_pct,
+            short_ratio: raw.short_ratio,        // days to cover (replaces short_float_pct)
             analyst_rating: raw.analyst_rating,
+            price_target_upside: raw.price_target_upside,
+            latest_analyst_action: raw.latest_analyst_action,
         };
 
         // Scoring
@@ -240,8 +302,7 @@ const App = {
 
 // --- Init on DOM ready ---
 document.addEventListener("DOMContentLoaded", () => {
-    // Check if API key exists
-    if (getApiKey()) {
+    if (getFinnhubKey() && getTwelveDataKey()) {
         App.loadDashboard();
     } else {
         UI.showSetupScreen();

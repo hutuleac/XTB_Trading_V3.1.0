@@ -1,13 +1,12 @@
 // ============================================================
-// API — FMP Data Fetching (browser-side, using /stable/ endpoints)
-// @version 3.1.0
-// @updated 2026-03-16
+// API — Finnhub + Twelve Data fetching (browser-side)
+// @version 3.2.0
+// @updated 2026-03-18
 // ============================================================
 
 const API = {
-    /**
-     * Create a fetch request with timeout
-     */
+
+    // ── Generic fetch with timeout ───────────────────────────
     async fetchWithTimeout(url, timeoutMs = 15000) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -24,303 +23,331 @@ const API = {
         }
     },
 
-    /**
-     * Check if a JSON response from FMP contains an error message (even at HTTP 200)
-     */
-    checkFmpError(data, endpoint) {
-        if (data && typeof data === "object" && !Array.isArray(data)) {
-            if (data["Error Message"]) {
-                throw new Error(`FMP error (${endpoint}): ${data["Error Message"]}`);
-            }
-            if (data["message"]) {
-                throw new Error(`FMP error (${endpoint}): ${data["message"]}`);
-            }
-            if (data["error"]) {
-                throw new Error(`FMP error (${endpoint}): ${data["error"]}`);
-            }
-        }
-        return data;
-    },
-
-    /**
-     * Generic FMP stable endpoint GET request.
-     * All calls go through /stable/ — the v3 legacy API is no longer used.
-     */
-    async fmpStableGet(endpoint, params = {}) {
-        const apiKey = getApiKey();
-        if (!apiKey) throw new Error("No FMP API key configured");
-        params.apikey = apiKey;
+    // ── Finnhub GET helper ───────────────────────────────────
+    async finnhubGet(path, params = {}) {
+        const key = getFinnhubKey();
+        if (!key) throw new Error("No Finnhub API key configured");
+        params.token = key;
         const qs = new URLSearchParams(params).toString();
-        const url = `${CONFIG.FMP_STABLE_URL}/${endpoint}?${qs}`;
+        const url = `${CONFIG.FINNHUB_URL}${path}?${qs}`;
         const resp = await this.fetchWithTimeout(url);
         if (!resp.ok) {
-            if (resp.status === 401 || resp.status === 403) throw new Error("Invalid FMP API key (HTTP " + resp.status + ")");
-            if (resp.status === 429) throw new Error("FMP API rate limit exceeded (HTTP 429). Wait and try again.");
-            throw new Error(`FMP API error: HTTP ${resp.status} for ${endpoint}`);
+            if (resp.status === 401 || resp.status === 403)
+                throw new Error("Invalid Finnhub key (HTTP " + resp.status + ")");
+            if (resp.status === 429)
+                throw new Error("Finnhub rate limit exceeded (HTTP 429)");
+            throw new Error(`Finnhub error: HTTP ${resp.status} for ${path}`);
         }
-        const data = await resp.json();
-        return this.checkFmpError(data, endpoint);
+        return resp.json();
     },
 
-    /**
-     * Validate API key with a simple test request using stable endpoint
-     */
+    // ── Twelve Data GET helper ───────────────────────────────
+    async twelveDataGet(path, params = {}) {
+        const key = getTwelveDataKey();
+        if (!key) throw new Error("No Twelve Data API key configured");
+        params.apikey = key;
+        // URLSearchParams encodes commas as %2C — Twelve Data needs raw commas in symbol list
+        const qs = new URLSearchParams(params).toString().replace(/%2C/gi, ",");
+        const url = `${CONFIG.TWELVE_DATA_URL}${path}?${qs}`;
+        const resp = await this.fetchWithTimeout(url, 30000);
+        if (!resp.ok) {
+            if (resp.status === 401 || resp.status === 403)
+                throw new Error("Invalid Twelve Data key (HTTP " + resp.status + ")");
+            if (resp.status === 429)
+                throw new Error("Twelve Data rate limit exceeded (HTTP 429)");
+            throw new Error(`Twelve Data error: HTTP ${resp.status} for ${path}`);
+        }
+        return resp.json();
+    },
+
+    // ── Validate API keys ─────────────────────────────────────
+    // NOTE: Only Finnhub is tested here. Twelve Data is NOT tested separately
+    // because each TD call costs 1 credit/minute toward the 8/min rate limit.
+    // The main OHLCV batch call will validate TD implicitly.
     async validateApiKey() {
         try {
-            const data = await this.fmpStableGet("profile", { symbol: "AAPL" });
-            if (!data || (Array.isArray(data) && data.length === 0)) {
-                return { valid: false, error: "API key returned empty response. It may be invalid or expired." };
+            const data = await this.finnhubGet("/quote", { symbol: "AAPL" });
+            if (!data || data.c === undefined) {
+                return { valid: false, error: "Finnhub: Unexpected response — key may be invalid" };
             }
             return { valid: true };
         } catch (e) {
-            return { valid: false, error: e.message };
+            return { valid: false, error: "Finnhub: " + e.message };
         }
     },
 
-    /**
-     * Fetch historical daily OHLCV for a ticker.
-     * Stable endpoint: /stable/historical-price-eod?symbol=AAPL&from=...&to=...
-     * Returns array of {date, open, high, low, close, volume} sorted ascending.
-     */
-    async fetchOHLCV(ticker) {
-        // Calculate from/to dates (OHLCV_DAYS trading days ≈ multiply by 1.5 for calendar days)
-        const to = new Date();
-        const from = new Date();
-        from.setDate(from.getDate() - Math.ceil(CONFIG.OHLCV_DAYS * 1.5));
-
-        const toStr = to.toISOString().slice(0, 10);
-        const fromStr = from.toISOString().slice(0, 10);
-
-        const data = await this.fmpStableGet("historical-price-eod", {
-            symbol: ticker,
-            from: fromStr,
-            to: toStr,
-        });
-
-        // Stable endpoint returns a flat array of OHLCV objects
-        if (!Array.isArray(data) || data.length === 0) {
-            throw new Error(`No OHLCV data for ${ticker}`);
+    // ── Parse a Twelve Data symbol entry into ascending OHLCV ─
+    parseTwelveDataOHLCV(entry, sym) {
+        if (!entry) {
+            console.warn(`TD: no entry for ${sym}`);
+            return [];
         }
-
-        // Sort ascending by date
-        return data
+        if (entry.status === "error") {
+            console.warn(`TD: symbol ${sym} error — ${entry.message || "unknown"}`);
+            return [];
+        }
+        if (!Array.isArray(entry.values)) {
+            console.warn(`TD: symbol ${sym} — unexpected shape:`, JSON.stringify(entry).slice(0, 200));
+            return [];
+        }
+        return entry.values
+            .slice()
+            .reverse()
             .map(d => ({
-                date: d.date,
-                open: d.open,
-                high: d.high,
-                low: d.low,
-                close: d.close,
-                volume: d.volume,
+                date: d.datetime,
+                open: parseFloat(d.open),
+                high: parseFloat(d.high),
+                low: parseFloat(d.low),
+                close: parseFloat(d.close),
+                volume: parseFloat(d.volume),
             }))
-            .sort((a, b) => a.date.localeCompare(b.date));
+            .filter(d => !isNaN(d.close));
     },
 
-    /**
-     * Fetch company profile (P/E, beta, market cap, 52w range, etc.)
-     * Stable endpoint: /stable/profile?symbol=AAPL
-     */
-    async fetchProfile(ticker) {
-        const data = await this.fmpStableGet("profile", { symbol: ticker });
-        // Stable may return array or single object
-        const p = Array.isArray(data) ? data[0] : data;
-        if (!p) return {};
-        return {
-            pe_trailing: p.pe || null,
-            pe_forward: null, // will try from key-metrics
-            dividend_yield: p.lastDiv ? (p.lastDiv / (p.price || 1)) * 100 : 0,
-            market_cap: p.mktCap || null,
-            beta: p.beta || null,
-            high_52w: p.range ? parseFloat(p.range.split("-")[1]) : null,
-            low_52w: p.range ? parseFloat(p.range.split("-")[0]) : null,
-            prev_close: p.previousClose || null,
-            current_price: p.price || null,
-            company_name: p.companyName || ticker,
-            sector: p.sector || null,
-        };
-    },
+    // ── Parse a raw Twelve Data API response object (single or multi-symbol) ──
+    _parseTwelveDataResponse(data, symbols) {
+        // Top-level error check
+        if (!data) throw new Error("Twelve Data returned empty response");
+        if (data.status === "error") throw new Error(`Twelve Data: ${data.message || "API error"}`);
+        if (data.code && data.message) throw new Error(`Twelve Data (${data.code}): ${data.message}`);
 
-    /**
-     * Fetch key metrics for forward P/E
-     * Stable endpoint: /stable/key-metrics-ttm?symbol=AAPL
-     */
-    async fetchKeyMetrics(ticker) {
-        try {
-            const data = await this.fmpStableGet("key-metrics-ttm", { symbol: ticker });
-            const item = Array.isArray(data) ? data[0] : data;
-            if (item) {
-                return {
-                    pe_forward: item.peRatioTTM || null,
-                };
+        const result = {};
+        if (symbols.length === 1 && data.values && Array.isArray(data.values)) {
+            // Single-symbol response: the object itself IS the symbol entry
+            result[symbols[0]] = this.parseTwelveDataOHLCV(data, symbols[0]);
+        } else {
+            for (const sym of symbols) {
+                result[sym] = this.parseTwelveDataOHLCV(data[sym], sym);
             }
-        } catch (e) {
-            console.warn(`Could not fetch key metrics for ${ticker}:`, e.message);
         }
-        return { pe_forward: null };
+        return result;
     },
 
-    /**
-     * Fetch earnings date from earnings calendar (ticker-specific)
-     * Stable endpoint: /stable/earnings-calendar?symbol=AAPL
-     * Falls back to: /stable/earning-calendar?symbol=AAPL
-     */
-    async fetchEarningsDate(ticker) {
-        try {
-            // Try both possible endpoint names (FMP stable API may use either)
-            let data = null;
-            try {
-                data = await this.fmpStableGet("earnings-calendar", { symbol: ticker });
-            } catch (e1) {
-                // Fallback to alternate name
-                try {
-                    data = await this.fmpStableGet("earning-calendar", { symbol: ticker });
-                } catch (e2) {
-                    // Try with from/to dates instead
-                    const today = new Date().toISOString().slice(0, 10);
-                    const nextYear = new Date();
-                    nextYear.setFullYear(nextYear.getFullYear() + 1);
-                    const toDate = nextYear.toISOString().slice(0, 10);
-                    data = await this.fmpStableGet("earnings-calendar", { from: today, to: toDate });
+    // ── Fetch ALL OHLCV (tickers + SPY) — chunked to respect 8 credits/min ──
+    // VIX is fetched separately at the end if credits allow (best-effort).
+    // Rate limit: 8 credits/min on Basic plan. Each symbol = 1 credit.
+    // With validation removed, this is the only TD call, so max 8 symbols/minute.
+    async fetchAllOHLCV(tickers, onProgress) {
+        const CREDITS_PER_MIN = 8;
+        // Core symbols: tickers + SPY (no VIX — saves 1 credit/min for bigger watchlists)
+        const coreSymbols = [...new Set([...tickers, CONFIG.BENCHMARK])];
+        const result = {};
+
+        // Split into chunks of CREDITS_PER_MIN
+        for (let i = 0; i < coreSymbols.length; i += CREDITS_PER_MIN) {
+            const chunk = coreSymbols.slice(i, i + CREDITS_PER_MIN);
+
+            if (i > 0) {
+                // Must wait ~65 seconds before next chunk (rate limit cooldown)
+                const waitSec = 65;
+                if (onProgress) {
+                    for (let s = waitSec; s > 0; s--) {
+                        onProgress(`Rate limit cooldown: ${s}s — fetching ${coreSymbols.length - i} more symbols...`);
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
+                } else {
+                    await new Promise(r => setTimeout(r, waitSec * 1000));
                 }
             }
 
-            if (!data || !Array.isArray(data) || data.length === 0) {
-                return { earnings_date: null, days_to_earnings: null };
-            }
+            if (onProgress) onProgress(`Fetching OHLCV batch ${Math.floor(i / CREDITS_PER_MIN) + 1}: ${chunk.join(", ")}...`);
 
-            const today = new Date().toISOString().slice(0, 10);
-            const todayDate = new Date(today);
+            const data = await this.twelveDataGet("/time_series", {
+                symbol: chunk.join(","),
+                interval: "1day",
+                outputsize: String(CONFIG.OHLCV_DAYS),
+            });
+
+            // ── DIAGNOSTIC LOGGING (remove after debugging) ──────────────
+            console.group(`[TD Diagnostic] Chunk ${Math.floor(i / CREDITS_PER_MIN) + 1}`);
+            console.log("Symbols requested:", chunk.join(", "));
+            console.log("Top-level response keys:", Object.keys(data || {}));
+            if (data) {
+                if (data.status === "error" || (data.code && data.message)) {
+                    console.error("TOP-LEVEL API ERROR:", data.code, data.message || data.status);
+                } else {
+                    for (const sym of chunk) {
+                        const entry = data[sym];
+                        if (!entry) {
+                            console.warn(`  ${sym}: KEY NOT FOUND in response`);
+                        } else if (entry.status === "error") {
+                            console.warn(`  ${sym}: API ERROR — ${entry.message}`);
+                        } else if (!Array.isArray(entry.values)) {
+                            console.warn(`  ${sym}: UNEXPECTED SHAPE —`, JSON.stringify(entry).slice(0, 150));
+                        } else {
+                            console.log(`  ${sym}: OK — ${entry.values.length} candles, last: ${entry.values[0]?.datetime}`);
+                        }
+                    }
+                }
+            } else {
+                console.error("DATA IS NULL/UNDEFINED");
+            }
+            console.groupEnd();
+            // ── END DIAGNOSTIC ─────────────────────────────────────────────
+
+            const chunkResult = this._parseTwelveDataResponse(data, chunk);
+            Object.assign(result, chunkResult);
+
+            // Log diagnostics
+            console.log(`TD chunk ${Math.floor(i / CREDITS_PER_MIN) + 1}: ${chunk.map(s => `${s}=${result[s]?.length ?? 0}`).join(", ")}`);
+        }
+
+        // Best-effort VIX fetch (only if we have remaining budget in this minute,
+        // i.e., if we only used 1 chunk = ≤ 7 tickers + SPY)
+        if (coreSymbols.length < CREDITS_PER_MIN) {
+            try {
+                const vixData = await this.twelveDataGet("/time_series", {
+                    symbol: "VIX",
+                    interval: "1day",
+                    outputsize: "30",   // Only need recent VIX, saves bandwidth
+                });
+                result["VIX"] = this.parseTwelveDataOHLCV(vixData.status === "error" ? null : vixData, "VIX");
+            } catch (e) {
+                console.info("VIX fetch skipped:", e.message);
+                result["VIX"] = [];
+            }
+        } else {
+            result["VIX"] = [];  // Too many tickers — skip VIX to avoid exceeding credits
+        }
+
+        return result;
+    },
+
+    // ── Fetch SPY benchmark (from pre-fetched batch) ─────────
+    async fetchBenchmark(ohlcvBatch) {
+        return (ohlcvBatch && ohlcvBatch[CONFIG.BENCHMARK]) || [];
+    },
+
+    // ── Finnhub: earnings date for a ticker ──────────────────
+    async fetchEarningsDate(ticker) {
+        try {
+            const today = new Date();
+            const from = today.toISOString().slice(0, 10);
+            const future = new Date(today);
+            future.setFullYear(future.getFullYear() + 1);
+            const to = future.toISOString().slice(0, 10);
+
+            const data = await this.finnhubGet("/calendar/earnings", { symbol: ticker, from, to });
+            const cal = data && Array.isArray(data.earningsCalendar) ? data.earningsCalendar : [];
+            if (cal.length === 0) return { earnings_date: null, days_to_earnings: null };
+
+            const todayDate = new Date(from);
             let nearest = null;
             let minDays = Infinity;
 
-            for (const item of data) {
-                // Filter by ticker if the response contains multiple symbols
+            for (const item of cal) {
                 if (item.symbol && item.symbol !== ticker) continue;
                 const d = new Date(item.date);
                 if (d >= todayDate) {
-                    const days = Math.round((d - todayDate) / (1000 * 60 * 60 * 24));
-                    if (days < minDays) {
-                        minDays = days;
-                        nearest = item.date;
-                    }
+                    const days = Math.round((d - todayDate) / 86400000);
+                    if (days < minDays) { minDays = days; nearest = item.date; }
                 }
             }
-
-            return {
-                earnings_date: nearest,
-                days_to_earnings: nearest ? minDays : null,
-            };
+            return { earnings_date: nearest, days_to_earnings: nearest ? minDays : null };
         } catch (e) {
-            console.warn(`Could not fetch earnings for ${ticker}:`, e.message);
+            console.warn(`Earnings fetch failed for ${ticker}:`, e.message);
             return { earnings_date: null, days_to_earnings: null };
         }
     },
 
-    /**
-     * Fetch EPS growth YoY from income statements
-     * Stable endpoint: /stable/income-statement?symbol=AAPL&period=annual&limit=2
-     */
-    async fetchEpsGrowth(ticker) {
-        try {
-            const data = await this.fmpStableGet("income-statement", {
-                symbol: ticker,
-                period: "annual",
-                limit: 2,
-            });
-            if (!data || !Array.isArray(data) || data.length < 2) return null;
-            const epsCurrent = data[0].epsdiluted || data[0].eps;
-            const epsPrevious = data[1].epsdiluted || data[1].eps;
-            if (epsPrevious && epsPrevious !== 0) {
-                return Math.round(((epsCurrent - epsPrevious) / Math.abs(epsPrevious)) * 10000) / 100;
-            }
-        } catch (e) {
-            console.warn(`Could not fetch EPS growth for ${ticker}:`, e.message);
-        }
-        return null;
+    // ── Map Finnhub recommendation counts → label ─────────────
+    mapConsensus(rec) {
+        if (!rec) return null;
+        const bull = (rec.strongBuy || 0) + (rec.buy || 0);
+        const bear = (rec.strongSell || 0) + (rec.sell || 0);
+        const neutral = rec.hold || 0;
+        const total = bull + bear + neutral;
+        if (total === 0) return null;
+        if (bull / total > 0.5) return "Buy";
+        if (bear / total > 0.5) return "Sell";
+        return "Hold";
     },
 
-    /**
-     * Fetch short float percentage
-     * Stable endpoint: /stable/shares-float?symbol=AAPL
-     */
-    async fetchShortFloat(ticker) {
-        try {
-            const data = await this.fmpStableGet("shares-float", { symbol: ticker });
-            if (data && Array.isArray(data) && data.length > 0) {
-                const ff = data[0].freeFloat;
-                if (ff != null) return Math.round(ff * 100) / 100;
-            }
-        } catch (e) {
-            console.warn(`Could not fetch short float for ${ticker}:`, e.message);
+    // ── Fetch all Finnhub data for one ticker ─────────────────
+    async fetchFinnhubTicker(ticker) {
+        // 5 core parallel calls
+        const [quoteR, profileR, metricsR, earningsR, recommendationR] = await Promise.allSettled([
+            this.finnhubGet("/quote", { symbol: ticker }),
+            this.finnhubGet("/stock/profile2", { symbol: ticker }),
+            this.finnhubGet("/stock/metric", { symbol: ticker, metric: "all" }),
+            this.fetchEarningsDate(ticker),
+            this.finnhubGet("/stock/recommendation", { symbol: ticker }),
+        ]);
+
+        const q = quoteR.status === "fulfilled" ? quoteR.value : {};
+        const p = profileR.status === "fulfilled" ? profileR.value : {};
+        const m = (metricsR.status === "fulfilled" && metricsR.value && metricsR.value.metric)
+                  ? metricsR.value.metric : {};
+        const earn = earningsR.status === "fulfilled" ? earningsR.value
+                     : { earnings_date: null, days_to_earnings: null };
+        const recArr = recommendationR.status === "fulfilled" && Array.isArray(recommendationR.value)
+                       ? recommendationR.value : [];
+        const rec = recArr.length > 0 ? recArr[0] : null;
+
+        const price = q.c || null;
+
+        // 2 optional calls — non-critical, best effort
+        let priceTargetUpside = null;
+        let latestAction = null;
+        const [ptR, actionR] = await Promise.allSettled([
+            price ? this.finnhubGet("/stock/price-target", { symbol: ticker }) : Promise.resolve(null),
+            this.finnhubGet("/stock/upgrade-downgrade", { symbol: ticker }),
+        ]);
+        if (ptR.status === "fulfilled" && ptR.value && ptR.value.targetMean && price) {
+            priceTargetUpside = Math.round(((ptR.value.targetMean - price) / price) * 10000) / 100;
         }
-        return null;
-    },
-
-    /**
-     * Fetch analyst consensus rating
-     * Stable endpoint: /stable/grades-consensus?symbol=AAPL
-     */
-    async fetchAnalystRating(ticker) {
-        try {
-            const data = await this.fmpStableGet("grades-consensus", { symbol: ticker });
-            if (data && Array.isArray(data) && data.length > 0) {
-                const latest = data[0];
-                if (latest.consensus) return latest.consensus;
-                const buy = (latest.buy || 0) + (latest.strongBuy || 0);
-                const hold = latest.hold || 0;
-                const sell = (latest.sell || 0) + (latest.strongSell || 0);
-                if (buy > hold && buy > sell) return "Buy";
-                if (sell > hold && sell > buy) return "Sell";
-                return "Hold";
-            }
-        } catch (e) {
-            console.warn(`Could not fetch analyst rating for ${ticker}:`, e.message);
-        }
-        return null;
-    },
-
-    /**
-     * Fetch all data for a single ticker. Returns combined data object.
-     */
-    async fetchTickerData(ticker) {
-        const [ohlcv, profile, keyMetrics, earnings, epsGrowth, shortFloat, analystRating] =
-            await Promise.allSettled([
-                this.fetchOHLCV(ticker),
-                this.fetchProfile(ticker),
-                this.fetchKeyMetrics(ticker),
-                this.fetchEarningsDate(ticker),
-                this.fetchEpsGrowth(ticker),
-                this.fetchShortFloat(ticker),
-                this.fetchAnalystRating(ticker),
-            ]);
-
-        const ohlcvData = ohlcv.status === "fulfilled" ? ohlcv.value : [];
-        const profileData = profile.status === "fulfilled" ? profile.value : {};
-        const keyMetricsData = keyMetrics.status === "fulfilled" ? keyMetrics.value : {};
-        const earningsData = earnings.status === "fulfilled" ? earnings.value : {};
-        const epsGrowthVal = epsGrowth.status === "fulfilled" ? epsGrowth.value : null;
-        const shortFloatVal = shortFloat.status === "fulfilled" ? shortFloat.value : null;
-        const analystRatingVal = analystRating.status === "fulfilled" ? analystRating.value : null;
-
-        if (ohlcvData.length === 0) {
-            // Provide more detail about what failed
-            const ohlcvError = ohlcv.status === "rejected" ? ohlcv.reason.message : "Empty response";
-            throw new Error(`No OHLCV data for ${ticker}: ${ohlcvError}`);
+        if (actionR.status === "fulfilled" && Array.isArray(actionR.value) && actionR.value.length > 0) {
+            const a = actionR.value[0];
+            const parts = [a.company, a.action || "", a.toGrade].filter(Boolean);
+            latestAction = parts.join(" ").slice(0, 30) || null;
         }
 
         return {
-            ohlcv: ohlcvData,
-            profile: { ...profileData, ...keyMetricsData },
-            earnings: earningsData,
-            eps_growth_yoy: epsGrowthVal,
-            short_float_pct: shortFloatVal,
-            analyst_rating: analystRatingVal,
+            profile: {
+                pe_trailing: m.peBasicExclExtraTTM || null,
+                pe_forward: m.peNormalizedAnnual || null,
+                dividend_yield: 0,
+                market_cap: p.marketCapitalization ? p.marketCapitalization * 1e6 : null,
+                beta: m.beta || null,
+                high_52w: m["52WeekHigh"] || null,
+                low_52w: m["52WeekLow"] || null,
+                prev_close: q.pc || null,
+                current_price: price,
+                quote_dp: q.dp || null,   // Finnhub's pre-calculated 1D%
+                company_name: p.name || ticker,
+                sector: p.finnhubIndustry || null,
+            },
+            earnings: earn,
+            eps_growth_yoy: m.epsGrowthTTMYoy != null
+                            ? Math.round(m.epsGrowthTTMYoy * 10000) / 100 : null,
+            short_ratio: m.shortRatio != null ? m.shortRatio : null,
+            analyst_rating: this.mapConsensus(rec),
+            price_target_upside: priceTargetUpside,
+            latest_analyst_action: latestAction,
         };
     },
 
-    /**
-     * Fetch SPY OHLCV for relative strength calculation
-     */
-    async fetchBenchmark() {
-        return this.fetchOHLCV(CONFIG.BENCHMARK);
+    // ── Main: fetch all data for one ticker (OHLCV from batch) ─
+    async fetchTickerData(ticker, ohlcvBatch) {
+        const ohlcv = (ohlcvBatch && ohlcvBatch[ticker]) || [];
+        if (ohlcv.length === 0) {
+            // Check if batch itself is completely empty (all symbols failed)
+            const anyData = ohlcvBatch && Object.values(ohlcvBatch).some(v => v && v.length > 0);
+            if (!anyData) {
+                throw new Error(`Twelve Data returned no OHLCV data for any symbol — check browser console (F12) for details`);
+            }
+            throw new Error(`No OHLCV data for ${ticker} — symbol may not be available on your Twelve Data plan`);
+        }
+        const finnhub = await this.fetchFinnhubTicker(ticker);
+        return {
+            ohlcv,
+            profile: finnhub.profile,
+            earnings: finnhub.earnings,
+            eps_growth_yoy: finnhub.eps_growth_yoy,
+            short_ratio: finnhub.short_ratio,
+            analyst_rating: finnhub.analyst_rating,
+            price_target_upside: finnhub.price_target_upside,
+            latest_analyst_action: finnhub.latest_analyst_action,
+        };
     },
 };

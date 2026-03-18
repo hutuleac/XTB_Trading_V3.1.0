@@ -1,7 +1,7 @@
 // ============================================================
 // UI — DOM rendering (tables, tooltips, summaries, settings)
-// @version 3.1.0
-// @updated 2026-03-16
+// @version 3.2.0
+// @updated 2026-03-18
 // ============================================================
 
 const UI = {
@@ -50,10 +50,11 @@ const UI = {
         if (v <= 21) return "text-accent-yellow";
         return "text-gray-400";
     },
+    // shortColor now uses days-to-cover (shortRatio), not float %
     shortColor(v) {
         if (v == null) return "";
-        if (v > 30) return "text-accent-red font-bold";
-        if (v > 20) return "text-accent-orange";
+        if (v > 10) return "text-accent-red font-bold";
+        if (v > 5) return "text-accent-orange";
         return "text-gray-300";
     },
     rsSpyColor(v) {
@@ -82,6 +83,28 @@ const UI = {
         if (v === "BUY_SWP") return "text-accent-red";
         if (v === "SELL_SWP") return "text-accent-green";
         return "text-gray-500";
+    },
+    macdColor(v) {
+        if (v == null) return "text-gray-400";
+        return v > 0 ? "text-accent-green" : "text-accent-red";
+    },
+    obvColor(v) {
+        if (v === "UP") return "text-accent-green";
+        if (v === "DOWN") return "text-accent-red";
+        return "text-gray-400";
+    },
+    targetUpsideColor(v) {
+        if (v == null) return "text-gray-400";
+        if (v > 15) return "text-accent-green";
+        if (v < -5) return "text-accent-red";
+        return "text-gray-300";
+    },
+    vixColor(v) {
+        if (v == null) return "text-gray-400";
+        if (v < 15) return "text-accent-green";
+        if (v < 20) return "text-accent-yellow";
+        if (v < 30) return "text-accent-orange";
+        return "text-accent-red font-bold";
     },
 
     fvgDisplay(d) {
@@ -138,16 +161,65 @@ const UI = {
         return html;
     },
 
+    // --- VIX header badge ---
+    updateVixBadge(vixValue) {
+        const el = document.getElementById("vix-badge");
+        if (!el) return;
+        if (vixValue == null) {
+            el.textContent = "VIX: —";
+            el.className = "px-3 py-1 rounded text-sm font-semibold bg-surface-700 text-gray-400";
+            return;
+        }
+        const cls = vixValue < 15
+            ? "bg-green-900/40 text-green-400 border border-green-700/40"
+            : vixValue < 20
+            ? "bg-yellow-900/40 text-yellow-400 border border-yellow-700/40"
+            : vixValue < 30
+            ? "bg-orange-900/40 text-orange-400 border border-orange-700/40"
+            : "bg-red-900/40 text-red-400 border border-red-700/40 font-bold";
+        el.textContent = `VIX: ${this.fmt(vixValue, 2)}`;
+        el.className = `px-3 py-1 rounded text-sm ${cls}`;
+    },
+
+    // --- Cache banner ---
+    showCacheBanner(message) {
+        let banner = document.getElementById("cache-banner");
+        if (!banner) return;
+        banner.textContent = message;
+        banner.classList.remove("hidden");
+    },
+
+    hideCacheBanner() {
+        const banner = document.getElementById("cache-banner");
+        if (banner) banner.classList.add("hidden");
+    },
+
     // --- Main render ---
-    renderDashboard(marketData, chartData, timestamp) {
+    renderDashboard(marketData, chartData, timestamp, vixValue, fromCache, ageHours) {
         this._marketData = marketData;
         this._chartData = chartData;
 
         const tickers = Object.keys(marketData);
 
         // Header
-        document.getElementById("header-timestamp").textContent = `Live snapshot: ${timestamp}`;
+        document.getElementById("header-timestamp").textContent = fromCache
+            ? `Cached snapshot: ${timestamp}`
+            : `Live snapshot: ${timestamp}`;
         document.getElementById("ticker-count").textContent = `${tickers.length} tickers`;
+
+        // VIX badge
+        this.updateVixBadge(vixValue);
+
+        // Cache banner
+        if (fromCache && ageHours != null) {
+            const h = Math.floor(ageHours);
+            const m = Math.round((ageHours - h) * 60);
+            const age = h > 0 ? `${h}h ${m}m` : `${m}m`;
+            const warn = ageHours > CONFIG.CACHE_TTL_HOURS ? " ⚠ Stale!" : "";
+            this.showCacheBanner(`Date din cache (${age} în urmă)${warn} · Apasă Refresh pentru actualizare`);
+        } else {
+            this.hideCacheBanner();
+        }
 
         // Tables
         const tbody = document.getElementById("table-body");
@@ -186,11 +258,36 @@ const UI = {
 
             if (idx < 2) row.querySelectorAll(".tip").forEach(el => el.classList.add("tip-down"));
 
-            // Chart panel row
+            // Chart panel row (colspan 10 — primary table)
             const chartRow = document.createElement("tr");
             chartRow.className = bgClass;
             chartRow.innerHTML = `<td colspan="10" class="p-0"><div id="chart-panel-${ticker}" class="chart-panel"></div></td>`;
             tbody.appendChild(chartRow);
+
+            // MACD display
+            const macdDisp = d.macd_val != null
+                ? `<span class="${this.macdColor(d.macd_hist)}">${this.fmt(d.macd_val, 3)}${d.macd_crossover === "BULL" ? " ↑" : d.macd_crossover === "BEAR" ? " ↓" : ""}</span>`
+                : "-";
+
+            // OBV display
+            const obvDisp = d.obv_trend
+                ? `<span class="${this.obvColor(d.obv_trend)}">${d.obv_trend}</span>`
+                : "-";
+
+            // Pivot display
+            const pivotDisp = (d.pivot_r1 != null && d.pivot_s1 != null)
+                ? `<span class="text-accent-red">${this.fmt(d.pivot_r1)}</span><span class="text-gray-500"> / </span><span class="text-accent-green">${this.fmt(d.pivot_s1)}</span>`
+                : "-";
+
+            // Price target upside display
+            const targetDisp = d.price_target_upside != null
+                ? `<span class="${this.targetUpsideColor(d.price_target_upside)}">${d.price_target_upside > 0 ? "+" : ""}${this.fmt(d.price_target_upside, 1)}%</span>`
+                : "-";
+
+            // Analyst action display (truncate)
+            const actionDisp = d.latest_analyst_action
+                ? `<span class="text-gray-300" title="${d.latest_analyst_action}">${d.latest_analyst_action.slice(0, 22)}</span>`
+                : "-";
 
             // Detail row
             const detRow = document.createElement("tr");
@@ -213,8 +310,13 @@ const UI = {
                 <td class="px-2 py-2.5 text-right cell-val">${this.fmt(d.pe_trailing, 1)}</td>
                 <td class="px-2 py-2.5 text-right cell-val">${this.fmt(d.pe_forward, 1)}</td>
                 <td class="px-2 py-2.5 text-right cell-val">${d.eps_growth_yoy != null ? this.fmtPct(d.eps_growth_yoy) : "-"}</td>
-                <td class="px-2 py-2.5 text-right cell-val ${this.shortColor(d.short_float_pct)}">${d.short_float_pct != null ? this.fmtPct(d.short_float_pct) : "-"}</td>
+                <td class="px-2 py-2.5 text-right cell-val tip ${this.shortColor(d.short_ratio)}">${d.short_ratio != null ? this.fmt(d.short_ratio, 1) + "d" : "-"}<span class="tiptext">Days to cover. &gt;5 = elevated, &gt;10 = squeeze territory</span></td>
                 <td class="px-2 py-2.5 text-right cell-val">${this.fmt(d.beta, 2)}</td>
+                <td class="px-2 py-2.5 text-center">${macdDisp}</td>
+                <td class="px-2 py-2.5 text-center">${obvDisp}</td>
+                <td class="px-2 py-2.5 text-center text-[12px]">${pivotDisp}</td>
+                <td class="px-2 py-2.5 text-right cell-val">${targetDisp}</td>
+                <td class="px-2 py-2.5 text-left text-[12px]">${actionDisp}</td>
             `;
             detailBody.appendChild(detRow);
         });
@@ -257,6 +359,8 @@ const UI = {
 
             const atrDesc = d.atr_pct != null ? `${this.fmt(d.atr_pct, 2)}% - ${d.atr_pct > 5 ? "Extreme volatility" : d.atr_pct > 3 ? "High volatility" : "Normal volatility"}` : "N/A";
             const earnDesc = d.days_to_earnings != null ? `${d.days_to_earnings} days - ${d.days_to_earnings < 7 ? "DANGER ZONE" : d.days_to_earnings <= 21 ? "Caution" : "Safe window"}` : "N/A";
+            const shortDesc = d.short_ratio != null ? `${this.fmt(d.short_ratio, 1)} days to cover${d.short_ratio > 10 ? " — SQUEEZE TERRITORY" : d.short_ratio > 5 ? " — elevated" : ""}` : "N/A";
+            const targetDesc = d.price_target_upside != null ? `${d.price_target_upside > 0 ? "+" : ""}${this.fmt(d.price_target_upside, 1)}% to consensus target` : "N/A";
 
             let criteriaHtml = "";
             if (d.setup_reasons && d.setup_reasons.length > 0 && d.setup_type !== "WAIT") {
@@ -287,7 +391,9 @@ const UI = {
                     <div class="detail-line">RSI: ${rsiDesc}</div>
                     <div class="detail-line">ATR%: ${atrDesc}</div>
                     <div class="detail-line">Earnings: ${earnDesc}</div>
-                    <div class="detail-line">Rating: ${d.analyst_rating || "N/A"} (analyst consensus)</div>
+                    <div class="detail-line">Short Ratio: ${shortDesc}</div>
+                    <div class="detail-line">Price Target: ${targetDesc}</div>
+                    <div class="detail-line">Rating: ${d.analyst_rating || "N/A"} (analyst consensus)${d.latest_analyst_action ? ` · Latest: ${d.latest_analyst_action}` : ""}</div>
                 </div>
                 ${criteriaHtml}
                 ${actionLine}
@@ -299,7 +405,8 @@ const UI = {
     // --- Settings UI ---
     showSettings() {
         document.getElementById("settings-overlay").classList.remove("hidden");
-        document.getElementById("api-key-input").value = getApiKey();
+        document.getElementById("finnhub-key-input").value = getFinnhubKey();
+        document.getElementById("twelve-key-input").value = getTwelveDataKey();
         document.getElementById("tickers-input").value = getTickers().join(", ");
     },
 
@@ -308,24 +415,21 @@ const UI = {
     },
 
     saveSettings() {
-        const key = document.getElementById("api-key-input").value.trim();
+        const finnhubKey = document.getElementById("finnhub-key-input").value.trim();
+        const twelveKey = document.getElementById("twelve-key-input").value.trim();
         const tickersRaw = document.getElementById("tickers-input").value;
         const tickers = tickersRaw.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
 
-        if (!key) {
-            alert("Please enter your FMP API key");
-            return;
-        }
-        if (tickers.length === 0) {
-            alert("Please enter at least one ticker");
-            return;
-        }
+        if (!finnhubKey) { alert("Please enter your Finnhub API key"); return; }
+        if (!twelveKey) { alert("Please enter your Twelve Data API key"); return; }
+        if (tickers.length === 0) { alert("Please enter at least one ticker"); return; }
 
-        setApiKey(key);
+        setFinnhubKey(finnhubKey);
+        setTwelveDataKey(twelveKey);
         setTickers(tickers);
+        clearCache();
         this.hideSettings();
-        // Trigger refresh
-        App.loadDashboard();
+        App.refreshData();
     },
 
     showLoading(message) {
@@ -337,7 +441,6 @@ const UI = {
         const progressEl = document.getElementById("loading-progress");
         progressEl.textContent = "";
         progressEl.classList.remove("text-red-400");
-        // Remove any previous error buttons
         const oldBtn = document.getElementById("error-actions");
         if (oldBtn) oldBtn.remove();
     },
@@ -357,18 +460,16 @@ const UI = {
         progressEl.textContent = message;
         progressEl.classList.add("text-red-400");
 
-        // Remove previous error actions if any
         const oldBtn = document.getElementById("error-actions");
         if (oldBtn) oldBtn.remove();
 
-        // Add action buttons
         if (showChangeKey) {
             const actionsDiv = document.createElement("div");
             actionsDiv.id = "error-actions";
             actionsDiv.className = "mt-4 flex gap-3 justify-center";
             actionsDiv.innerHTML = `
-                <button class="btn-primary" onclick="UI.showSettings()" style="padding:8px 20px; font-size:14px;">🔑 Change API Key</button>
-                <button class="btn-secondary" onclick="App.loadDashboard()" style="padding:8px 20px; font-size:14px;">↻ Retry</button>
+                <button class="btn-primary" onclick="UI.showSettings()" style="padding:8px 20px; font-size:14px;">🔑 Change API Keys</button>
+                <button class="btn-secondary" onclick="App.refreshData()" style="padding:8px 20px; font-size:14px;">↻ Retry</button>
             `;
             document.getElementById("loading-section").appendChild(actionsDiv);
         }
@@ -384,18 +485,20 @@ const UI = {
     },
 
     saveInitialSetup() {
-        const key = document.getElementById("setup-api-key").value.trim();
-        if (!key) {
-            alert("Please enter your FMP API key to continue");
-            return;
-        }
-        setApiKey(key);
+        const finnhubKey = document.getElementById("setup-finnhub-key").value.trim();
+        const twelveKey = document.getElementById("setup-twelve-key").value.trim();
+        if (!finnhubKey) { alert("Please enter your Finnhub API key to continue"); return; }
+        if (!twelveKey) { alert("Please enter your Twelve Data API key to continue"); return; }
+
+        setFinnhubKey(finnhubKey);
+        setTwelveDataKey(twelveKey);
+
         const tickersRaw = document.getElementById("setup-tickers").value;
         if (tickersRaw.trim()) {
             const tickers = tickersRaw.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
             if (tickers.length > 0) setTickers(tickers);
         }
         this.hideSetupScreen();
-        App.loadDashboard();
+        App.refreshData();
     },
 };

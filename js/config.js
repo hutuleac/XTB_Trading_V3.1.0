@@ -1,7 +1,7 @@
 // ============================================================
 // CONFIG — All configurable parameters
-// @version 3.1.0
-// @updated 2026-03-16
+// @version 3.2.0
+// @updated 2026-03-18
 // ============================================================
 
 const CONFIG = {
@@ -9,8 +9,11 @@ const CONFIG = {
     DEFAULT_TICKERS: ["TSLA", "HOOD", "SOFI", "AMZN", "SKM", "GOOGL"],
     BENCHMARK: "SPY",
 
-    // --- FMP API (stable endpoints only) ---
-    FMP_STABLE_URL: "https://financialmodelingprep.com/stable",
+    // --- Finnhub API ---
+    FINNHUB_URL: "https://finnhub.io/api/v1",
+
+    // --- Twelve Data API ---
+    TWELVE_DATA_URL: "https://api.twelvedata.com",
 
     // --- Data Fetch ---
     OHLCV_DAYS: 504,          // ~2 years of trading days
@@ -23,6 +26,9 @@ const CONFIG = {
     BB_PERIOD: 20,
     BB_STD: 2,
     ADX_PERIOD: 14,
+    MACD_FAST: 12,
+    MACD_SLOW: 26,
+    MACD_SIGNAL: 9,
 
     // --- AVWAP Windows (trading days) ---
     AVWAP_WINDOWS: { "5d": 5, "14d": 14, "30d": 30, "6m": 126 },
@@ -45,19 +51,28 @@ const CONFIG = {
     CHART_DAYS: 90,
 
     // --- LocalStorage Keys ---
-    LS_API_KEY: "fmp_api_key",
+    LS_FINNHUB_KEY: "finnhub_api_key",
+    LS_TWELVE_DATA_KEY: "twelve_data_api_key",
     LS_TICKERS: "watchlist_tickers",
+    LS_CACHE: "dashboard_cache",
+    CACHE_TTL_HOURS: 24,
 };
 
-// --- Helpers for localStorage ---
-function getApiKey() {
-    return localStorage.getItem(CONFIG.LS_API_KEY) || "";
+// --- API Key helpers ---
+function getFinnhubKey() {
+    return localStorage.getItem(CONFIG.LS_FINNHUB_KEY) || "";
+}
+function setFinnhubKey(key) {
+    localStorage.setItem(CONFIG.LS_FINNHUB_KEY, key.trim());
+}
+function getTwelveDataKey() {
+    return localStorage.getItem(CONFIG.LS_TWELVE_DATA_KEY) || "";
+}
+function setTwelveDataKey(key) {
+    localStorage.setItem(CONFIG.LS_TWELVE_DATA_KEY, key.trim());
 }
 
-function setApiKey(key) {
-    localStorage.setItem(CONFIG.LS_API_KEY, key.trim());
-}
-
+// --- Watchlist helpers ---
 function getTickers() {
     const stored = localStorage.getItem(CONFIG.LS_TICKERS);
     if (stored) {
@@ -71,4 +86,27 @@ function getTickers() {
 
 function setTickers(arr) {
     localStorage.setItem(CONFIG.LS_TICKERS, JSON.stringify(arr.map(t => t.toUpperCase().trim()).filter(Boolean)));
+}
+
+// --- Cache helpers ---
+function getCache() {
+    try {
+        const raw = localStorage.getItem(CONFIG.LS_CACHE);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+}
+
+function setCache(payload) {
+    try {
+        localStorage.setItem(CONFIG.LS_CACHE, JSON.stringify({
+            timestamp: new Date().toISOString(),
+            ...payload,
+        }));
+    } catch (e) {
+        console.warn("Cache write failed (storage quota?):", e.message);
+    }
+}
+
+function clearCache() {
+    localStorage.removeItem(CONFIG.LS_CACHE);
 }
