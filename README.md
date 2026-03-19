@@ -1,256 +1,341 @@
 # 📊 Stock Market Dashboard — Live
 
-> **Version 3.1.0** | Last updated: 2026-03-16
+**Version 3.2.5** · A real-time stock market analysis dashboard that combines 15+ technical and fundamental indicators into an actionable scoring system with trade setup recommendations.
 
-A **100% client-side** stock analysis dashboard that runs on **Cloudflare Pages**, **GitHub Pages**, or any static hosting — no backend required. All calculations happen in your browser using live data from the Financial Modeling Prep (FMP) Stable API.
-
-> **Zero server costs. Zero dependencies. Just deploy and analyze.**
-
-![HTML](https://img.shields.io/badge/HTML-CSS-JS-blue)
-![Cloudflare Pages](https://img.shields.io/badge/Deploy-Cloudflare_Pages-F38020?logo=cloudflare&logoColor=white)
-![FMP API](https://img.shields.io/badge/API-FMP_Stable-green)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+> Pure client-side HTML/JavaScript — no backend required. Just open `index.html` in your browser.
 
 ---
 
-## ✨ Features
+## Table of Contents
 
-### Live Data & Analysis
-- **Real-time data** from Financial Modeling Prep (FMP) **Stable API** — fetched on each refresh
-- **20+ technical indicators** calculated in-browser: RSI, ATR, EMA50/200, AVWAP, POC, ADX, Bollinger Bandwidth, Fibonacci, Market Structure, Sweeps, FVG
-- **Composite Score (0–100)** with 9 weighted criteria across technicals, fundamentals, and sentiment
-- **Confluence Setup Detection** — automated LONG / SHORT / WAIT signals with position sizing (60% or 100%)
-- **Relative Strength vs SPY** benchmark comparison
-
-### Interactive Dashboard
-- Dark-themed responsive UI (Tailwind CSS)
-- Expandable candlestick charts (Lightweight Charts) with EMA, AVWAP, POC, Fibonacci overlays
-- Volume + RSI sub-chart with synced time scale
-- Hover tooltips with full score breakdowns
-- Per-ticker summary cards with actionable trade descriptions
-- Chart screenshot export (PNG)
-
-### User-Friendly
-- **Editable watchlist** — add/remove tickers directly from the UI
-- **API key stored locally** in your browser (localStorage) — never sent to any server except FMP
-- **API key validation** — checks key before loading data, with clear error messages
-- **Settings panel** for quick configuration changes
-- **Loading states** with progress indicators
-- **Error recovery** — "Change API Key" and "Retry" buttons on error screens
-- **One-click refresh** to reload all data
+- [Overview](#overview)
+- [Features](#features)
+- [Getting Started](#getting-started)
+- [Using the Dashboard](#using-the-dashboard)
+  - [Primary Table](#primary-table)
+  - [Technical & Fundamental Details Table](#technical--fundamental-details-table)
+  - [Analysis per Ticker](#analysis-per-ticker)
+  - [Interactive Charts](#interactive-charts)
+- [Understanding the Scoring System](#understanding-the-scoring-system)
+- [Trade Setup Guide](#trade-setup-guide)
+- [Color Coding](#color-coding)
+- [Key Indicators Reference](#key-indicators-reference)
+- [Architecture](#architecture)
+- [API Rate Limits](#api-rate-limits)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-## 🚀 Quick Start
+## Overview
 
-### Option 1: Deploy to Cloudflare Pages (Recommended)
+The Stock Market Dashboard is a browser-based trading analysis tool that fetches live market data from two API providers, calculates a comprehensive set of technical indicators client-side, and presents the results in an interactive dashboard with composite scoring and trade setup recommendations.
 
-1. **Fork or clone** this repository
-2. Go to [Cloudflare Pages](https://pages.cloudflare.com/)
-3. Connect your GitHub repo → select this repository
-4. Set **Build output directory** to `/` (root) — no build step needed
-5. Deploy!
-6. Open your site → enter your FMP API key → done
+**Data Sources:**
+| Provider | Purpose | Free Tier |
+|----------|---------|-----------|
+| [Finnhub](https://finnhub.io/) | Live quotes, fundamentals, analyst ratings, earnings | 60 requests/min |
+| [Twelve Data](https://twelvedata.com/) | Historical OHLCV candlestick data | 8 requests/min, 800 credits/day |
 
-### Option 2: Run Locally
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/stock-dashboard-live.git
-   cd stock-dashboard-live
-   ```
-
-2. Serve the files with any static server:
-   ```bash
-   # Python
-   python -m http.server 8080
-
-   # Node.js
-   npx serve .
-
-   # Or just open index.html in your browser
-   ```
-
-3. Open `http://localhost:8080` → enter your FMP API key → done
-
-### Option 3: GitHub Pages
-
-1. Fork this repository
-2. Go to Settings → Pages → Source: `main` branch, `/ (root)` folder
-3. Your dashboard will be live at `https://YOUR_USERNAME.github.io/stock-dashboard-live/`
+**No server or build step required** — all processing happens in the browser using vanilla JavaScript.
 
 ---
 
-## 🔑 API Key Setup
+## Features
 
-This dashboard uses the **Financial Modeling Prep (FMP) Stable API**:
+### Technical Analysis
+- **RSI** (14-day) — momentum oscillator for overbought/oversold detection
+- **EMA 50 / EMA 200** — short and long-term trend identification, Golden/Death Cross
+- **MACD** (12, 26, 9) — momentum crossover signals
+- **ADX** (14-day) — trend strength measurement
+- **Bollinger Bands Bandwidth** — volatility squeeze detection
+- **ATR%** — average true range as percentage of price for volatility sizing
 
-1. Sign up at [site.financialmodelingprep.com](https://site.financialmodelingprep.com/)
-2. Get your API key (free tier available)
-3. Enter the key on first visit — it's saved in your browser's localStorage
-4. You can update it anytime via the ⚙ Settings button
+### Smart Money Concepts
+- **Liquidity Sweeps** — detection of stop hunts (buy/sell sweeps)
+- **Fair Value Gaps (FVG)** — price imbalance zones with fill percentage tracking
+- **Market Structure** — higher highs/higher lows vs lower highs/lower lows analysis
+- **Volume Profile (POC)** — Point of Control identification across multiple timeframes
 
-> **Privacy**: Your API key is stored only in your browser's localStorage. It is never sent to any server other than the FMP API directly.
+### Volume & Price Analysis
+- **AVWAP** (Anchored VWAP) — volume-weighted average price across 5d, 14d, 30d, 6m windows
+- **OBV Trend** — On-Balance Volume for accumulation/distribution detection
+- **Volume Ratio** — current volume vs 20-day average for unusual activity detection
+- **Fibonacci Retracement** — position within 126-day swing range
 
-> **Important**: This dashboard uses the `/stable/` API endpoints exclusively. Make sure your FMP plan supports stable endpoints.
+### Fundamental Data
+- **P/E Ratio** (trailing and forward)
+- **EPS Growth** (year-over-year)
+- **Short Ratio** (days to cover)
+- **Beta** (market sensitivity)
+- **Earnings Calendar** (days until next report)
+- **Analyst Ratings & Price Targets**
+- **52-Week Range Position**
+- **Relative Strength vs SPY**
+
+### Dashboard Features
+- **Composite Score** (0–100) combining all indicators
+- **Trade Setup Recommendations** (LONG / SHORT / WAIT) with position sizing
+- **Interactive Charts** with EMA overlays, RSI sub-chart, and OHLCV legend
+- **24-hour Local Cache** — instant loading on return visits
+- **Customizable Watchlist** — up to 12 tickers
+- **Quick Links** to VIX and CNN Fear & Greed Index
 
 ---
 
-## 📁 Project Structure
+## Getting Started
+
+### Prerequisites
+
+You need free API keys from two providers:
+
+1. **Finnhub API Key** — Sign up at [finnhub.io](https://finnhub.io/)
+   - Free tier: 60 requests/minute
+   - Used for: live quotes, company profiles, analyst ratings, earnings dates
+
+2. **Twelve Data API Key** — Sign up at [twelvedata.com](https://twelvedata.com/)
+   - Free tier: 8 requests/minute, 800 credits/day
+   - Used for: historical OHLCV candlestick data (up to 2 years)
+
+### Launch
+
+1. Open `index.html` in any modern web browser
+2. Enter your **Finnhub API Key** in the setup screen
+3. Enter your **Twelve Data API Key**
+4. Customize your **watchlist** (comma-separated ticker symbols, max 12)
+   - Default: `TSLA, HOOD, SOFI, AMZN, SKM, GOOGL`
+5. Click **Launch Dashboard**
+
+The dashboard will validate your API keys, fetch data for all tickers, calculate indicators, and render the results. The first load takes 15–60 seconds depending on the number of tickers.
+
+### Subsequent Visits
+
+Data is cached locally for 24 hours. On return visits, the dashboard loads instantly from cache. Use the **↻ Refresh** button to fetch fresh data.
+
+---
+
+## Using the Dashboard
+
+### Primary Table
+
+The top-level table provides a quick overview for each ticker:
+
+| Column | Description |
+|--------|-------------|
+| **Symbol** | Ticker symbol (click row to toggle chart) |
+| **Price** | Current market price from Finnhub live quote |
+| **1D%** | Daily price change vs previous close |
+| **Score** | Composite score 0–100 (hover for full breakdown) |
+| **Setup** | Trade recommendation: LONG / SHORT / WAIT (hover for criteria) |
+| **RSI** | 14-day Relative Strength Index |
+| **Trend** | EMA-based trend: Bullish / Bearish / Neutral |
+| **Structure** | Market structure: Bullish (HH+HL) / Bearish (LH+LL) |
+| **Earn** | Days until next earnings report |
+| **Rating** | Analyst consensus: Buy / Hold / Sell |
+
+### Technical & Fundamental Details Table
+
+The second table expands with 20+ additional metrics:
+
+| Column | Description |
+|--------|-------------|
+| **ATR%** | Daily volatility as % of price (use for stop-loss sizing) |
+| **EMA50 / EMA200** | Moving average values |
+| **AVWAP30d** | 30-day anchored volume-weighted average price |
+| **POC14d** | 14-day Point of Control (highest volume price level) |
+| **ADX** | Trend strength (not direction): >30 strong, <20 ranging |
+| **BB-BW** | Bollinger Band width — low = squeeze pending |
+| **Sweep** | Liquidity sweep: BUY_SWP (bullish) / SELL_SWP (bearish) |
+| **FVG** | Fair Value Gap type + fill percentage |
+| **Fib-Pos** | Fibonacci retracement position (38.2–61.8% = golden zone) |
+| **Vol/Avg** | Volume ratio vs 20-day average (>2x = unusual, >3x = institutional) |
+| **52W%** | Position in 52-week range (100% = yearly high) |
+| **RS-SPY** | 30-day relative strength vs S&P 500 |
+| **P/E / Fwd P/E** | Trailing and forward price/earnings ratios |
+| **EPS-G** | Earnings per share growth (YoY) |
+| **Short Ratio** | Days to cover short positions |
+| **Beta** | Market sensitivity (>1 = amplified, <1 = muted) |
+| **MACD** | Crossover direction + MACD line value |
+| **OBV** | On-Balance Volume trend: UP / DOWN / FLAT |
+| **R1 / S1** | Daily pivot point resistance and support levels |
+| **Target↑%** | Analyst consensus price target upside percentage |
+| **Analyst Action** | Latest analyst upgrade/downgrade |
+
+### Analysis per Ticker
+
+A collapsible section at the bottom provides per-ticker analysis cards with:
+- Current score and setup recommendation
+- Key metric values
+- Full criteria breakdown (met vs missed conditions)
+- Position sizing guidance
+
+### Interactive Charts
+
+Click any ticker row to expand a 90-day chart panel featuring:
+- **Candlestick chart** (OHLCV) with EMA50 and EMA200 overlays
+- **AVWAP 30d** and **POC 14d** horizontal reference levels
+- **RSI sub-chart** with overbought (70) and oversold (30) lines
+- **Volume bars** with color coding
+- **OHLCV legend** showing values on hover/crosshair
+
+---
+
+## Understanding the Scoring System
+
+The **Composite Score** (0–100) aggregates 15+ criteria from technical and fundamental analysis. Each criterion contributes points when met:
+
+| Score Range | Label | Meaning |
+|-------------|-------|---------|
+| **70–100** | 🟢 Strong | Multiple criteria aligned — high-conviction setup |
+| **40–69** | 🟡 Marginal | Mixed signals — proceed with caution |
+| **0–39** | 🔴 Avoid | Insufficient criteria — stay on the sideline |
+
+**Hover over the score badge** in the dashboard to see the full breakdown of which criteria are met (✓) and which are not (✗).
+
+---
+
+## Trade Setup Guide
+
+The system evaluates **LONG** and **SHORT** criteria independently:
+
+### Position Sizing
+| Criteria Met | Sizing | Recommendation |
+|-------------|--------|----------------|
+| **5+ criteria** | 100% position | Full conviction entry |
+| **4 criteria** | 60% position | Partial/scaled entry |
+| **< 4 criteria** | — | WAIT (no trade) |
+
+### Key Entry Rules
+- **RSI < 30** = Oversold entry zone (LONG)
+- **RSI > 70** = Overbought zone (SHORT or exit)
+- **Earnings < 7 days away** = Danger zone — avoid new entries
+- **Earnings > 21 days away** = Safe window to enter
+- **BB-BW squeeze + ADX rising** = Explosive move incoming
+- **OBV UP + Price UP** = Confirmed momentum
+- **Vol/Avg > 3x** = Institutional breakout activity
+- **FVG** = Unfilled imbalance acts as price magnet
+
+---
+
+## Color Coding
+
+The dashboard uses a consistent color scheme across all elements:
+
+| Color | Meaning |
+|-------|---------|
+| 🟢 **Green** | Bullish · Oversold (entry) · Buy · Outperforming |
+| 🔴 **Red** | Bearish · Overbought · Sell · Underperforming |
+| 🟡 **Yellow** | Neutral · Caution · Hold |
+| 🟠 **Orange** | Warning / elevated risk |
+| 🔵 **Blue** | Informational / interactive elements |
+
+---
+
+## Key Indicators Reference
+
+| Indicator | Bullish Signal | Bearish Signal |
+|-----------|---------------|----------------|
+| RSI | < 30 (oversold) | > 70 (overbought) |
+| Trend | Price > EMA50 > EMA200 | Price < EMA50 < EMA200 |
+| Structure | Higher Highs + Higher Lows | Lower Highs + Lower Lows |
+| ADX | > 30 (strong trend) | < 20 (ranging/choppy) |
+| MACD | ↑ Bullish crossover | ↓ Bearish crossover |
+| OBV | UP (accumulation) | DOWN (distribution) |
+| Sweep | BUY_SWP (lows swept & reclaimed) | SELL_SWP (highs swept & rejected) |
+| FVG | BULL gap (acts as support) | BEAR gap (acts as resistance) |
+| RS-SPY | > 1.05 (outperforming S&P 500) | < 0.95 (underperforming) |
+| Vol/Avg | > 2x (unusual interest) | — |
+| Short Ratio | > 10d (squeeze potential) | — |
+| Earnings | > 21d away (safe) | < 7d away (danger zone) |
+
+---
+
+## Architecture
+
+The application is organized into modular JavaScript files:
 
 ```
-stock-dashboard-live/
-├── index.html              # Main dashboard (single page app)
-├── README.md               # This file
-├── ARCHITECTURE.md          # Detailed architecture & data flow documentation
-├── js/
-│   ├── config.js           # v3.1.0 — Parameters, localStorage helpers
-│   ├── api.js              # v3.1.0 — FMP Stable API fetching
-│   ├── technicals.js       # v3.1.0 — RSI, ATR, EMA, AVWAP, POC, ADX, BB, Fibonacci, RS
-│   ├── structure.js        # v3.1.0 — Market structure, sweeps, FVG detection
-│   ├── scoring.js          # v3.1.0 — Composite score + confluence setup logic
-│   ├── charts.js           # v3.1.0 — Lightweight Charts rendering
-│   ├── ui.js               # v3.1.0 — DOM rendering (tables, tooltips, summaries, settings)
-│   └── app.js              # v3.1.0 — Main orchestrator
+index.html          → Main dashboard UI (HTML + Tailwind CSS)
+js/
+├── config.js       → Configuration constants, API URLs, localStorage helpers
+├── api.js          → API communication (Finnhub + Twelve Data), data fetching
+├── technicals.js   → Technical indicator calculations (RSI, EMA, MACD, ATR, etc.)
+├── structure.js    → Market structure analysis (swing points, sweeps, FVGs)
+├── scoring.js      → Composite scoring engine + trade setup logic
+├── charts.js       → Chart rendering (Lightweight Charts library)
+├── ui.js           → UI rendering, overlays, settings management
+└── app.js          → Main orchestrator (data flow, initialization)
 ```
 
-**No build step. No bundler. No node_modules.** Just plain HTML + JS.
+### Data Flow
+
+```
+1. App.loadDashboard()
+   ├── Check for cached data (24h TTL) → render immediately if valid
+   └── App.refreshData()
+       ├── API.validateApiKey()          → validate both API keys
+       ├── API.fetchAllOHLCV()           → Twelve Data batch OHLCV
+       ├── API.fetchTickerData()         → Finnhub per-ticker data
+       ├── App.processTicker()           → calculate all indicators
+       │   ├── Technicals.*              → RSI, EMA, MACD, ATR, ADX, etc.
+       │   ├── Structure.*               → market structure, sweeps, FVGs
+       │   └── Scoring.*                 → composite score + setup
+       ├── setCache()                    → save to localStorage
+       └── UI.renderDashboard()          → render tables, charts, analysis
+```
+
+### Dependencies
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| [Tailwind CSS](https://tailwindcss.com/) | CDN (latest) | Utility-first CSS framework |
+| [Lightweight Charts](https://github.com/nicehash/lightweight-charts) | 4.1.3 | Financial charting library |
+
+Both are loaded from CDN — no `npm install` or build step required.
 
 ---
 
-## 📊 What Gets Calculated
+## API Rate Limits
 
-### Technical Indicators (all computed in-browser)
-| Indicator | Description |
-|---|---|
-| RSI (14) | Relative Strength Index — oversold/overbought detection |
-| ATR & ATR% | Average True Range — volatility measurement |
-| EMA 50 / 200 | Exponential Moving Averages — trend direction |
-| AVWAP (5d/14d/30d/6m) | Anchored VWAP — institutional support levels |
-| POC (5d/14d) | Point of Control — highest volume price level |
-| ADX (14) | Average Directional Index — trend strength |
-| BB Bandwidth | Bollinger Band width — squeeze detection |
-| Fibonacci | 6-month retracement levels with position classification |
-| Market Structure | HH/HL (Bullish) vs LH/LL (Bearish) detection |
-| Liquidity Sweeps | Buy-side/sell-side trap detection |
-| Fair Value Gaps | Imbalance detection with fill percentage |
-| RS vs SPY | 30-day relative strength vs benchmark |
-| Volume Ratio | Current vs 20-day average volume |
+The dashboard is designed to work within free-tier API limits:
 
-### Fundamental Data (from FMP Stable API)
-| Data | Endpoint |
-|---|---|
-| P/E (Trailing & Forward) | `/stable/profile`, `/stable/key-metrics-ttm` |
-| Beta | `/stable/profile` |
-| 52-week range | `/stable/profile` |
-| Earnings date & countdown | `/stable/earnings-calendar` |
-| EPS Growth YoY | `/stable/income-statement` |
-| Short Float % | `/stable/shares-float` |
-| Analyst Rating | `/stable/grades-consensus` |
+| Provider | Rate Limit | How the App Handles It |
+|----------|-----------|------------------------|
+| **Finnhub** | 60 req/min | Batches tickers in groups of 6 with 1.5s pauses between batches |
+| **Twelve Data** | 8 req/min, 800 credits/day | Batched OHLCV requests with chunking for >8 symbols |
 
-### Scoring System (0–100)
-- **Technical** (max 50): RSI zone, Structure, EMA200, AVWAP30d, Fibonacci position
-- **Fundamental** (max 30): Earnings safety, EPS growth, P/E improvement
-- **Sentiment** (max 10): Relative strength vs SPY
-- **Penalties**: Earnings risk (−20), Extreme volatility (−15), Full bearish (−15)
-
-### Setup Detection
-- **LONG**: 6 criteria → 4+ met = 60% sizing, 5+ = 100%
-- **SHORT**: 6 criteria → same sizing logic
-- **WAIT**: Auto-blocked when conditions are unfavorable (earnings, volatility, squeeze, etc.)
+**Tips to stay within limits:**
+- Keep your watchlist to 6–8 tickers for fastest loading
+- Maximum 12 tickers supported
+- Use the **↻ Refresh** button sparingly (data is cached for 24 hours)
+- The SPY benchmark is automatically included in OHLCV fetches for relative strength calculation
 
 ---
 
-## ⚙️ Configuration
+## Troubleshooting
 
-Default tickers: `TSLA, HOOD, SOFI, AMZN, SKM, GOOGL`
+| Problem | Solution |
+|---------|----------|
+| **"API key validation failed"** | Verify your API keys in **⚙ Settings**. Ensure they are active on the provider websites. |
+| **Dashboard shows stale data** | Click **↻ Refresh** to force a fresh data pull. |
+| **"Twelve Data unavailable"** | You may have hit the daily credit limit (800/day). Wait until the next UTC day or upgrade your plan. |
+| **Some tickers show errors** | The ticker may not be supported by one of the APIs, or you hit a rate limit. Check the browser console for details. |
+| **Charts not rendering** | Ensure you have internet access (Lightweight Charts loads from CDN). Try a hard refresh (Ctrl+Shift+R). |
+| **Data loads slowly** | Reduce watchlist size. First load fetches ~2 years of OHLCV data per ticker. Subsequent loads use cache. |
+| **Settings not saving** | Check if localStorage is enabled in your browser. Private/incognito mode may block storage. |
 
-All technical parameters can be modified in `js/config.js`:
+### Clearing All Data
 
-| Parameter | Default | Description |
-|---|---|---|
-| `OHLCV_DAYS` | `504` | ~2 years of historical data |
-| `RSI_PERIOD` | `14` | RSI lookback |
-| `EMA_SHORT/LONG` | `50/200` | EMA periods |
-| `AVWAP_WINDOWS` | `5d, 14d, 30d, 6m` | AVWAP anchor windows |
-| `FIB_WINDOW` | `126` | ~6 months for Fibonacci |
-| `CHART_DAYS` | `90` | Days shown on charts |
+To fully reset the application, open your browser's developer console and run:
 
-Watchlist is editable from the UI ⚙ Settings panel — no code changes needed.
+```javascript
+localStorage.clear();
+location.reload();
+```
 
----
-
-## 📋 API Usage
-
-All API calls use the FMP **Stable API** (`https://financialmodelingprep.com/stable/`).
-
-With **6 tickers**, each refresh uses approximately:
-
-| Endpoint | Requests | Purpose |
-|---|---|---|
-| `/stable/profile` | 1 (validation) + 6 | Company profiles |
-| `/stable/historical-price-eod` | 7 (6 + SPY) | OHLCV price data |
-| `/stable/key-metrics-ttm` | 6 | Forward P/E |
-| `/stable/earnings-calendar` | 6 | Earnings dates |
-| `/stable/income-statement` | 6 | EPS growth |
-| `/stable/shares-float` | 6 | Short float % |
-| `/stable/grades-consensus` | 6 | Analyst ratings |
-
-**Total: ~44 requests per refresh**
-
-All requests include a 15-second timeout. Failed non-critical requests (earnings, analyst ratings, etc.) are handled gracefully — the dashboard still loads with available data.
+This removes API keys, watchlist, and cached data. You'll see the initial setup screen again.
 
 ---
 
-## 🌐 Deployment Notes
+## License
 
-### Cloudflare Pages
-- No build command needed
-- Build output directory: `/` (root)
-- Works with automatic Git deploys
-
-### GitHub Pages
-- Enable Pages in repo Settings
-- Source: `main` branch, root folder
-- No Jekyll needed (add empty `.nojekyll` file if issues)
-
-### Any Static Host
-- Just upload all files — no server-side processing required
-- All external dependencies loaded from CDN (Tailwind, Lightweight Charts)
-
----
-
-## 📝 Changelog
-
-### v3.1.0 (2026-03-16)
-- **BREAKING**: Migrated all API calls from `/api/v3/` (legacy) to `/stable/` endpoints
-- **BREAKING**: OHLCV endpoint changed from `historical-price-full` to `historical-price-eod` with `from`/`to` date parameters
-- **Added**: API key validation before loading dashboard data
-- **Added**: Detailed error messages showing actual API errors per ticker
-- **Added**: "Change API Key" and "Retry" buttons on error screens
-- **Added**: Request timeout (15s) with AbortController
-- **Added**: Detection of error messages in HTTP 200 responses (FMP sometimes returns errors at status 200)
-- **Added**: Rate limit (HTTP 429) detection and user-friendly message
-- **Fixed**: Earnings calendar endpoint — tries multiple endpoint names with fallback
-- **Fixed**: CSS state reset on loading/error transitions
-- **Fixed**: Setup overlay visibility conflicts
-- **Added**: ARCHITECTURE.md documentation
-- **Added**: Version headers in all JS files
-
-### v3.0.0 (Initial)
-- Initial release with v3 API endpoints
-- Full technical analysis dashboard with 20+ indicators
-- Composite scoring system
-- Interactive charts with Lightweight Charts
-
----
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
-
----
-
-## ⚠️ Disclaimer
-
-**This tool is for educational and research purposes only.** It does not constitute financial advice, investment recommendations, or solicitation to buy or sell any securities. Trading involves substantial risk. Always do your own research and consult a qualified financial advisor before making investment decisions. The authors are not responsible for any financial losses incurred from using this tool.
+This project is provided as-is for educational and personal trading analysis purposes. Always do your own research before making investment decisions.
